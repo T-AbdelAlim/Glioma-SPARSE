@@ -46,7 +46,7 @@ USE_OVERSAMPLING = True
 USE_EXISTING_SPLIT = False
 
 BATCH_SIZE = 4
-NUM_EPOCHS = 150
+NUM_EPOCHS = 50
 SEED = 42
 
 
@@ -234,16 +234,35 @@ def main():
     )
 
     start = time.time()
-    history = trainer.train(NUM_EPOCHS)
+    history, probs, labels = trainer.train(NUM_EPOCHS)
     total_time = time.time() - start
 
     print(f"\nTotal training time: {total_time:.2f} sec")
 
     # --------------------------------------------------------
-    # TRAINING CURVES
+    # TRAINING AND EVALUATION METRICS
     # --------------------------------------------------------
+    # 1. Training curves
     plot_training_curves(history, OUT_DIR)
 
+    # 2. Confusion matrix + ROC
+    if probs is not None and labels is not None:
+        preds = probs.argmax(axis=1)
+        class_names = base_dataset.classes
+
+        plot_confusion_matrix(
+            labels,
+            preds,
+            class_names,
+            OUT_DIR / "confusion_matrix.png"
+        )
+
+        plot_roc_curve(
+            labels,
+            probs,
+            class_names,
+            OUT_DIR / "roc_curve.png"
+        )
     # --------------------------------------------------------
     # TEST EVALUATION
     # --------------------------------------------------------
