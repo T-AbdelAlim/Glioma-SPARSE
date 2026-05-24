@@ -10,7 +10,7 @@ def process_wsi_folder(
     input_dir,
     output_dir,
     tissue_threshold=0.3,
-    threshold_metric="tissue"  # "tissue" or "effective"
+    threshold_metric="tissue"
 ):
 
     input_dir = Path(input_dir)
@@ -50,6 +50,7 @@ def process_wsi_folder(
                 slide_path,
                 output_path=None,
                 tissue_threshold=None,
+                threshold_metric=threshold_metric,
                 save_mask=False,
             )
 
@@ -65,17 +66,10 @@ def process_wsi_folder(
                 ])
                 continue
 
-            # now returns: img, tissue_fraction, tissue_pixels
-            img, tissue_fraction, tissue_pixels = result
+            img, tissue_fraction, effective_fraction = result
 
             # ----------------------------------------------------
-            # Compute effective tissue fraction (correct)
-            # ----------------------------------------------------
-            padded_area = img.size[0] * img.size[1]
-            effective_fraction = tissue_pixels / float(padded_area)
-
-            # ----------------------------------------------------
-            # Decide inclusion based on chosen metric
+            # Decide inclusion
             # ----------------------------------------------------
             if threshold_metric == "effective":
                 metric_value = effective_fraction

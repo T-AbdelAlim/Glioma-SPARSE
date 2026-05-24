@@ -88,17 +88,20 @@ What it does:
 3. Computes tissue mask  
 4. Computes:
    - tissue_fraction (before padding)
-   - tissue_pixels (absolute count)
 5. Pads image to square  
 6. Resizes to output size  
-7. Returns:
-   ```
-   img, tissue_fraction, tissue_pixels
-   ```
+7. Computes:
+   - effective_tissue_fraction (after resizing)
+8. Returns:
+
+```
+img, tissue_fraction, effective_fraction
+```
 
 Important:
 - Tissue is computed BEFORE padding  
-- Padding does not affect biological signal  
+- Effective fraction is computed AFTER resizing  
+- All metric computation happens inside this function  
 
 ---
 
@@ -120,11 +123,13 @@ What it does:
 
 - Recursively finds WSIs  
 - Generates thumbnails  
-- Computes metrics  
+- Uses metrics returned from `create_wsi_thumbnail`  
 - Splits outputs into:
   - included/
   - low_tissue/
 - Logs everything to CSV  
+
+No metric recomputation is performed in this script.
 
 ---
 
@@ -150,26 +155,26 @@ THRESHOLD_METRIC = "tissue"   # or "effective"
 #### tissue_fraction
 
 ```
-tissue_pixels / original_image_pixels
+fraction of tissue pixels BEFORE padding
 ```
 
 - Computed BEFORE padding  
 - Reflects biological content  
-- Default metric for filtering  
+- Use when you care about actual tissue  
 
 ---
 
 #### effective_tissue_fraction
 
 ```
-tissue_pixels / padded_image_pixels
+fraction of tissue pixels AFTER resizing
 ```
 
-- Computed AFTER padding  
-- Reflects how much of model input is useful  
-- Detects:
-  - thin slides
+- Computed AFTER padding and resizing  
+- Reflects what the model actually sees  
+- Captures:
   - excessive padding
+  - thin tissue regions
   - scanner artifacts  
 
 ---
@@ -180,8 +185,13 @@ Controls filtering:
 
 ```
 "tissue"    → biological filtering (default)
-"effective" → geometry-aware filtering
+"effective" → model-input-aware filtering
 ```
+
+Guideline:
+
+- Use "tissue" for dataset curation  
+- Use "effective" for model robustness  
 
 ---
 

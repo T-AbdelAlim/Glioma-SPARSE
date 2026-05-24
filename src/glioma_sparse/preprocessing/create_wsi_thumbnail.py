@@ -57,11 +57,6 @@ def pick_level(slide, target_downsample):
 # ============================================================
 
 def create_tissue_mask(img):
-    """
-    Create binary tissue mask from RGB image.
-    Uses brightness + saturation heuristic.
-    """
-
     img_np = np.array(img).astype(np.float32) / 255.0
 
     maxc = np.max(img_np, axis=2)
@@ -75,7 +70,7 @@ def create_tissue_mask(img):
     return tissue_mask
 
 
-def estimate_tissue_fraction(mask):
+def estimate_fraction(mask):
     return mask.sum() / mask.size
 
 
@@ -124,8 +119,10 @@ def create_wsi_thumbnail(
     target_mpp=DEFAULT_TARGET_MPP,
     output_size=DEFAULT_OUTPUT_SIZE,
     tissue_threshold=None,
+    threshold_metric="tissue",   # "tissue" or "effective"
     save_mask=False,
 ):
+
     slide_path = Path(slide_path)
 
     if not slide_path.exists():
@@ -160,28 +157,40 @@ def create_wsi_thumbnail(
     img = img.convert("RGB")
 
     # --------------------------------------------------------
-    # TISSUE MASK (BEFORE PADDING)
+    # TISSUE FRACTION (BEFORE PADDING)
     # --------------------------------------------------------
 
-    tissue_mask = create_tissue_mask(img)
-    tissue_fraction = estimate_tissue_fraction(tissue_mask)
-
-    if tissue_threshold is not None:
-        if tissue_fraction < tissue_threshold:
-            slide.close()
-            return None, tissue_fraction
+    mask_before = create_tissue_mask(img)
+    tissue_fraction = estimate_fraction(mask_before)
 
     # --------------------------------------------------------
-    # POSTPROCESSING & EFFECTIVE FRACTION
+    # POSTPROCESSING
     # --------------------------------------------------------
 
     img = pad_with_background_color(img)
     img = img.resize((output_size, output_size), Image.BICUBIC)
 
-    padded_area = img.size[0] * img.size[1]
-    tissue_pixels = tissue_mask.sum()
+    # --------------------------------------------------------
+    # EFFECTIVE FRACTION (AFTER RESIZE)
+    # --------------------------------------------------------
 
-    effective_fraction = tissue_pixels / padded_area
+    mask_after = create_tissue_mask(img)
+    effective_fraction = estimate_fraction(mask_after)
+
+    # --------------------------------------------------------
+    # THRESHOLD DECISION
+    # --------------------------------------------------------
+
+    if threshold_metric == "effective":
+        metric_value = effective_fraction
+    else:
+        metric_value = tissue_fraction
+
+    if tissue_threshold is not None:
+        if metric_value < tissue_threshold:
+            slide.close()
+            return None, tissue_fraction, effective_fraction
+
     # --------------------------------------------------------
     # SAVE OUTPUT
     # --------------------------------------------------------
@@ -193,10 +202,9 @@ def create_wsi_thumbnail(
         img.save(output_path, quality=90)
 
         if save_mask:
-            mask_img = Image.fromarray((tissue_mask * 255).astype(np.uint8))
-            mask_img = mask_img.resize((output_size, output_size), Image.NEAREST)
+            mask_img = Image.fromarray((mask_after * 255).astype(np.uint8))
             mask_img.save(output_path.with_name("{}_mask.png".format(output_path.stem)))
 
     slide.close()
 
-    return img, tissue_fraction, tissue_pixels
+    return img, tissue_fraction, effective_fraction
