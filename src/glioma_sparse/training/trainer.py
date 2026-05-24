@@ -19,7 +19,7 @@ class Trainer:
         device,
         output_dir,
         early_stopping_metric="auc",
-        patience=15,
+        patience=8,
         min_delta=1e-4,
         save_every_epoch=True
     ):
