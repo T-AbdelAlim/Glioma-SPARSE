@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+
+# Environments
+.venv/
+venv/
+
+# IDEs
+.idea/
+.vscode/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs and outputs
+*.log
+outputs/
+results/
+runs/
+
+# Data and trained weights (these never go in git)
+data/
+*.h5
+*.pt
+*.ckpt
+*.svs
+*.ndpi
+*.mrxs
+*.tif
+*.tiff
+
+# OS
+.DS_Store
+Thumbs.db
