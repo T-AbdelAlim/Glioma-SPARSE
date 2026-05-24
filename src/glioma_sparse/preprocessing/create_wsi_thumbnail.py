@@ -172,12 +172,16 @@ def create_wsi_thumbnail(
             return None, tissue_fraction
 
     # --------------------------------------------------------
-    # POSTPROCESSING
+    # POSTPROCESSING & EFFECTIVE FRACTION
     # --------------------------------------------------------
 
     img = pad_with_background_color(img)
     img = img.resize((output_size, output_size), Image.BICUBIC)
 
+    padded_area = img.size[0] * img.size[1]
+    tissue_pixels = tissue_mask.sum()
+
+    effective_fraction = tissue_pixels / padded_area
     # --------------------------------------------------------
     # SAVE OUTPUT
     # --------------------------------------------------------
@@ -195,4 +199,4 @@ def create_wsi_thumbnail(
 
     slide.close()
 
-    return img, tissue_fraction
+    return img, tissue_fraction, tissue_pixels
