@@ -1,23 +1,31 @@
 from pathlib import Path
-
 from glioma_sparse.preprocessing.process_dataset import process_wsi_folder
-
-
-# ============================================================
-# PATHS
-# ============================================================
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-DATA_DIR = REPO_ROOT / "data" / "testdata"
-OUTPUT_DIR = REPO_ROOT / "scripts" / "output_thumbnails"
 
 
 # ============================================================
 # CONFIG
 # ============================================================
 
-TISSUE_THRESHOLD = 0.15
-THRESHOLD_METRIC = "effective"   # "tissue" or "effective"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+BASE_INPUT = Path(
+    r"D:\Thinkpad_Backup\Documents\EMC_postdoc\Virtual_Biopsy\data\WSI_ebrains\WHO2021_data"
+)
+
+OUTPUT_ROOT = REPO_ROOT / "data"
+
+CLASS_FOLDERS = [
+    "astro_IDHmt_G2",
+    "astro_IDHmt_G3",
+    "astro_IDHmt_G4",
+    "control",
+    "GBM_IDHwt",
+    "oligo_IDHmt_1p19qdel_G2",
+    "oligo_IDHmt_1p19qdel_G3",
+]
+
+TISSUE_THRESHOLD = 0.1
+THRESHOLD_METRIC = "effective"
 
 
 # ============================================================
@@ -26,26 +34,29 @@ THRESHOLD_METRIC = "effective"   # "tissue" or "effective"
 
 def main():
 
-    print("\n=== GLIOMA-SPARSE DATASET PROCESSING DEMO ===\n")
+    print("\n=== GLIOMA-SPARSE BATCH PROCESSING ===\n")
 
-    print("Input directory: {}".format(DATA_DIR))
-    print("Output directory: {}".format(OUTPUT_DIR))
-    print("Tissue threshold: {}".format(TISSUE_THRESHOLD))
-    print("Threshold metric: {}\n".format(THRESHOLD_METRIC))
+    for cls in CLASS_FOLDERS:
 
-    if THRESHOLD_METRIC == "tissue":
-        print("Filtering based on biological tissue content\n")
-    else:
-        print("Filtering based on effective (post-padding) content\n")
+        input_dir = BASE_INPUT / cls / cls
+        output_dir = OUTPUT_ROOT / cls
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        print(f"\n--- Processing: {cls} ---")
+        print(f"Input:  {input_dir}")
+        print(f"Output: {output_dir}")
 
-    process_wsi_folder(
-        input_dir=DATA_DIR,
-        output_dir=OUTPUT_DIR,
-        tissue_threshold=TISSUE_THRESHOLD,
-        threshold_metric=THRESHOLD_METRIC,
-    )
+        if not input_dir.exists():
+            print("WARNING: input directory not found, skipping")
+            continue
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        process_wsi_folder(
+            input_dir=input_dir,
+            output_dir=output_dir,
+            tissue_threshold=TISSUE_THRESHOLD,
+            threshold_metric=THRESHOLD_METRIC,
+        )
 
 
 # ============================================================
