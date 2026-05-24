@@ -49,8 +49,6 @@ def process_wsi_folder(
             result = create_wsi_thumbnail(
                 slide_path,
                 output_path=None,
-                tissue_threshold=None,
-                threshold_metric=threshold_metric,
                 save_mask=False,
             )
 

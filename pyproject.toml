@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "glioma-sparse"
 version = "0.1.0"
 description = "Efficient coarse-to-fine computational histopathology"
-authors = [{name = "Tareq Abdelalim"}]
+authors = [{name = "Tareq Abdel Alim"}]
 readme = "README.md"
 requires-python = ">=3.9"
 

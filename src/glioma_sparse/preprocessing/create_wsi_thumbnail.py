@@ -24,6 +24,18 @@ def safe_float(v):
         return None
 
 
+def parse_hex_color(s):
+    if not s:
+        return None
+    s = str(s).strip().lstrip("#")
+    if len(s) != 6:
+        return None
+    try:
+        return tuple(int(s[i:i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        return None
+
+
 def get_base_mpp(props):
     mpp_x = safe_float(props.get("openslide.mpp-x"))
     mpp_y = safe_float(props.get("openslide.mpp-y"))
@@ -43,6 +55,16 @@ def get_base_mpp(props):
     if mag:
         return 10.0 / mag
 
+    return None
+
+
+def get_background_color_from_props(props):
+    for key in ("openslide.background-color",
+                "aperio.BackgroundColor",
+                "hamamatsu.BackgroundColor"):
+        rgb = parse_hex_color(props.get(key))
+        if rgb is not None:
+            return rgb
     return None
 
 
@@ -78,25 +100,28 @@ def estimate_fraction(mask):
 # IMAGE POSTPROCESSING
 # ============================================================
 
-def pad_with_background_color(img):
+def pad_with_background_color(img, bg_color_hint=None):
     img_np = np.array(img)
 
-    corners = np.concatenate([
-        img_np[0:50, 0:50],
-        img_np[0:50, -50:],
-        img_np[-50:, 0:50],
-        img_np[-50:, -50:]
-    ], axis=0).reshape(-1, 3)
-
-    valid = corners[np.any(corners > 10, axis=1)]
-
-    if len(valid) > 0:
-        bg_color = np.median(valid, axis=0).astype(np.uint8)
+    if bg_color_hint is not None:
+        bg_color = np.array(bg_color_hint, dtype=np.uint8)
     else:
-        bg_color = np.array([255, 255, 255], dtype=np.uint8)
+        corners = np.concatenate([
+            img_np[0:50, 0:50],
+            img_np[0:50, -50:],
+            img_np[-50:, 0:50],
+            img_np[-50:, -50:]
+        ], axis=0).reshape(-1, 3)
 
-    black_mask = np.all(img_np < 10, axis=-1)
-    img_np[black_mask] = bg_color
+        valid = corners[np.any(corners > 10, axis=1)]
+
+        if len(valid) > 0:
+            bg_color = np.median(valid, axis=0).astype(np.uint8)
+        else:
+            bg_color = np.array([255, 255, 255], dtype=np.uint8)
+
+    padding_mask = np.all(img_np == 0, axis=-1)
+    img_np[padding_mask] = bg_color
 
     img = Image.fromarray(img_np)
 
@@ -118,8 +143,6 @@ def create_wsi_thumbnail(
     output_path=None,
     target_mpp=DEFAULT_TARGET_MPP,
     output_size=DEFAULT_OUTPUT_SIZE,
-    tissue_threshold=None,
-    threshold_metric="tissue",   # "tissue" or "effective"
     save_mask=False,
 ):
 
@@ -131,6 +154,7 @@ def create_wsi_thumbnail(
     slide = openslide.OpenSlide(str(slide_path))
     props = slide.properties
     base_mpp = get_base_mpp(props)
+    bg_hint = get_background_color_from_props(props)
 
     # --------------------------------------------------------
     # READ IMAGE
@@ -167,7 +191,7 @@ def create_wsi_thumbnail(
     # POSTPROCESSING
     # --------------------------------------------------------
 
-    img = pad_with_background_color(img)
+    img = pad_with_background_color(img, bg_color_hint=bg_hint)
     img = img.resize((output_size, output_size), Image.BICUBIC)
 
     # --------------------------------------------------------
@@ -176,20 +200,6 @@ def create_wsi_thumbnail(
 
     mask_after = create_tissue_mask(img)
     effective_fraction = estimate_fraction(mask_after)
-
-    # --------------------------------------------------------
-    # THRESHOLD DECISION
-    # --------------------------------------------------------
-
-    if threshold_metric == "effective":
-        metric_value = effective_fraction
-    else:
-        metric_value = tissue_fraction
-
-    if tissue_threshold is not None:
-        if metric_value < tissue_threshold:
-            slide.close()
-            return None, tissue_fraction, effective_fraction
 
     # --------------------------------------------------------
     # SAVE OUTPUT
