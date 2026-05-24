@@ -12,11 +12,11 @@ The goal is to minimize compute while preserving diagnostic signal.
 
 ## INDEX
 
-1. Installation
-2. Repository Structure
-3. Preprocessing
-4. Stage A Pipeline (Current)
-5. Outputs
+1. [Installation](#1-installation)
+2. [Repository Structure](#2-repository-structure)
+3. [Preprocessing](#3-preprocessing)
+4. [Stage A Pipeline (Current)](#4-stage-a-pipeline-current)
+5. [Outputs](#5-outputs)
 
 ---
 
