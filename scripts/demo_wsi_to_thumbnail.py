@@ -17,6 +17,7 @@ OUTPUT_DIR = REPO_ROOT / "scripts" / "output_thumbnails"
 # ============================================================
 
 TISSUE_THRESHOLD = 0.3
+THRESHOLD_METRIC = "tissue"   # "tissue" or "effective"
 
 
 # ============================================================
@@ -29,12 +30,14 @@ def main():
 
     print("Input directory: {}".format(DATA_DIR))
     print("Output directory: {}".format(OUTPUT_DIR))
-    print("Tissue threshold: {}\n".format(TISSUE_THRESHOLD))
+    print("Tissue threshold: {}".format(TISSUE_THRESHOLD))
+    print("Threshold metric: {}\n".format(THRESHOLD_METRIC))
 
     process_wsi_folder(
         input_dir=DATA_DIR,
         output_dir=OUTPUT_DIR,
         tissue_threshold=TISSUE_THRESHOLD,
+        threshold_metric=THRESHOLD_METRIC,
     )
 
 

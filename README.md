@@ -2,213 +2,229 @@
 
 GLIOMA-SPARSE is a lightweight, interpretable computational pathology framework for glioma classification from routine H&E whole-slide images.
 
-The method follows a coarse-to-fine strategy, identifying informative regions at low resolution and selectively refining predictions at higher resolution. This enables accurate classification while minimizing computational cost.
+The method follows a coarse-to-fine strategy:
+- Stage A: low-resolution analysis to identify informative regions
+- Stage B: high-resolution analysis on selected regions
+
+The goal is to minimize compute while preserving diagnostic signal.
 
 ---
 
-# Index
+## INDEX
 
 1. Installation  
-2. Preprocessing  
-   2.1 Thumbnail Generation  
-   2.2 Single-slide processing  
-   2.3 Batch processing  
+2. Repository Structure  
+3. Preprocessing  
+   3.1 Thumbnail Generation (single WSI)  
+   3.2 Dataset Processing (batch)  
+   3.3 Key Concepts  
+4. Outputs  
 
 ---
 
-# 1. Installation
+## 1. INSTALLATION
 
-## Create environment
+Create and activate environment:
 
 ```bash
 conda env create -f environment.yml
-conda activate Glioma-SPARSE
+conda activate glioma-sparse
 ```
 
-## Install package (important)
+Install repository in editable mode:
 
 ```bash
 pip install -e .
 ```
 
-This allows imports like:
+---
 
-```python
-from glioma_sparse.preprocessing.create_wsi_thumbnail import create_wsi_thumbnail
+## 2. REPOSITORY STRUCTURE
+
+Use this as a quick mental map:
+
+```
+Glioma-SPARSE/
+
+configs/        → configuration files (future)
+data/           → small test WSIs (ignored by git)
+docs/           → documentation
+notebooks/      → experiments / exploration
+scripts/        → runnable demo scripts
+src/
+  glioma_sparse/
+    preprocessing/
+      create_wsi_thumbnail.py   → single WSI processing
+      process_dataset.py        → batch processing
+tests/         → unit tests (optional)
 ```
 
 ---
 
-# 2. Preprocessing
+## 3. PREPROCESSING
 
-This stage converts raw WSIs into standardized thumbnails and computes tissue content.
-
-Core idea:
-- Always generate thumbnails  
-- Always compute tissue fraction  
-- Never discard data silently  
-- Use threshold only for grouping  
+This stage converts raw WSIs into thumbnails and computes tissue statistics.
 
 ---
 
-## 2.1 Thumbnail Generation
+### 3.1 Thumbnail Generation (single WSI)
 
-### Core script (single WSI)
+Core function:
+
+```
+create_wsi_thumbnail()
+```
 
 Location:
+
 ```
 src/glioma_sparse/preprocessing/create_wsi_thumbnail.py
 ```
 
-Main function:
-```python
-create_wsi_thumbnail(
-    slide_path,
-    output_path=None,
-    target_mpp=4.0,
-    output_size=2048,
-    tissue_threshold=None,
-    save_mask=False
-)
-```
+What it does:
 
-Returns:
-```
-(thumbnail, tissue_fraction)
-```
+1. Reads WSI using OpenSlide  
+2. Downsamples to target physical resolution (MPP)  
+3. Computes tissue mask  
+4. Computes:
+   - tissue_fraction (before padding)
+   - tissue_pixels (absolute count)
+5. Pads image to square  
+6. Resizes to output size  
+7. Returns:
+   ```
+   img, tissue_fraction, tissue_pixels
+   ```
 
-Notes:
-- No printing  
-- No folder logic  
-- Used in both batch and inference pipelines  
+Important:
+- Tissue is computed BEFORE padding  
+- Padding does not affect biological signal  
 
 ---
 
-## 2.2 Single-slide processing
+### 3.2 Dataset Processing (batch)
 
-Used for:
-- debugging  
-- development  
-- future inference pipeline  
+Core function:
 
-Example:
-
-```python
-from pathlib import Path
-from glioma_sparse.preprocessing.create_wsi_thumbnail import create_wsi_thumbnail
-
-slide_path = Path("path/to/slide.svs")
-
-thumbnail, tissue_fraction = create_wsi_thumbnail(
-    slide_path,
-    output_path="output.jpg",
-    target_mpp=4.0,
-    output_size=2048,
-    tissue_threshold=None,
-    save_mask=True
-)
-
-print("Tissue fraction:", tissue_fraction)
 ```
-
----
-
-## 2.3 Batch processing
-
-### Script
+process_wsi_folder()
+```
 
 Location:
+
 ```
 src/glioma_sparse/preprocessing/process_dataset.py
 ```
 
-Main function:
-```python
-process_wsi_folder(
-    input_dir,
-    output_dir,
-    tissue_threshold=0.3
-)
-```
-
-### What it does
+What it does:
 
 - Recursively finds WSIs  
-- Generates thumbnails for all slides  
-- Computes tissue fraction  
+- Generates thumbnails  
+- Computes metrics  
 - Splits outputs into:
-  - kept/ (included)
-  - low_tissue/ (below threshold)  
-- Writes metadata to CSV  
-
-### Output structure
-
-```
-output_dir/
-    kept/
-    low_tissue/
-    metadata.csv
-```
-
-### CSV format
-
-```
-slide_path, thumbnail_path, tissue_fraction, included
-```
+  - included/
+  - low_tissue/
+- Logs everything to CSV  
 
 ---
-
-## Running batch processing
 
 ### Demo script
 
-Location:
-```
-scripts/demo_thumbnail.py
-```
-
-Run from project root:
+Run:
 
 ```bash
-python scripts/demo_thumbnail.py
+python scripts/process_dataset_demo.py
+```
+
+Config inside script:
+
+```
+TISSUE_THRESHOLD = 0.3
+THRESHOLD_METRIC = "tissue"   # or "effective"
 ```
 
 ---
 
-## Configuration (important parameters)
+### 3.3 Key Concepts
 
-These appear in different places but should be kept consistent:
+#### tissue_fraction
 
-### Resolution
 ```
-target_mpp = 4.0
-```
-
-### Output size
-```
-output_size = 2048
+tissue_pixels / original_image_pixels
 ```
 
-### Tissue filtering (for grouping only)
+- Computed BEFORE padding  
+- Reflects biological content  
+- Default metric for filtering  
+
+---
+
+#### effective_tissue_fraction
+
 ```
-tissue_threshold = 0.3
+tissue_pixels / padded_image_pixels
+```
+
+- Computed AFTER padding  
+- Reflects how much of model input is useful  
+- Detects:
+  - thin slides
+  - excessive padding
+  - scanner artifacts  
+
+---
+
+#### threshold_metric
+
+Controls filtering:
+
+```
+"tissue"    → biological filtering (default)
+"effective" → geometry-aware filtering
 ```
 
 ---
 
-## Notes to self (important)
+## 4. OUTPUTS
 
-- Do NOT filter slides during generation  
-- Threshold is only for grouping, not exclusion  
-- Always log tissue_fraction  
-- Always keep metadata.csv  
-- MRXS files may behave differently so check tissue masks  
+After running dataset processing:
+
+```
+output_dir/
+
+included/      → thumbnails above threshold
+low_tissue/    → thumbnails below threshold
+metadata.csv   → full log
+```
 
 ---
 
-## Next steps (future work)
+### metadata.csv
+
+Columns:
+
+```
+slide_path
+thumbnail_path
+tissue_fraction
+effective_tissue_fraction
+included
+```
+
+---
+
+## NOTES
+
+- Thumbnails are saved as JPG (quality=90)
+- Tissue masks (optional) are saved as PNG
+- Designed to work on:
+  - local machines (Windows/Linux)
+  - remote GPU clusters
+
+---
+
+## NEXT STEPS
 
 - Stage A: low-resolution risk mapping  
-- Stage B: high-resolution patch classification  
+- Stage B: patch-based classification  
 - End-to-end inference pipeline  
-- Visualization (mask overlays)  
