@@ -16,8 +16,8 @@ OUTPUT_DIR = REPO_ROOT / "scripts" / "output_thumbnails"
 # CONFIG
 # ============================================================
 
-TISSUE_THRESHOLD = 0.3
-THRESHOLD_METRIC = "tissue"   # "tissue" or "effective"
+TISSUE_THRESHOLD = 0.15
+THRESHOLD_METRIC = "effective"   # "tissue" or "effective"
 
 
 # ============================================================
@@ -32,6 +32,13 @@ def main():
     print("Output directory: {}".format(OUTPUT_DIR))
     print("Tissue threshold: {}".format(TISSUE_THRESHOLD))
     print("Threshold metric: {}\n".format(THRESHOLD_METRIC))
+
+    if THRESHOLD_METRIC == "tissue":
+        print("Filtering based on biological tissue content\n")
+    else:
+        print("Filtering based on effective (post-padding) content\n")
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     process_wsi_folder(
         input_dir=DATA_DIR,
