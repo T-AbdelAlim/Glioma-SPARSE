@@ -2,25 +2,37 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from pathlib import Path
-import shutil
 import csv
-import random
-from collections import defaultdict
+import time
+from datetime import datetime
+
+import numpy as np
+from sklearn.model_selection import train_test_split
 
 from glioma_sparse.data_utils.slide_dataset import SlideDataset
 from glioma_sparse.data_utils.patches import Patch
 from glioma_sparse.data_utils.transforms import build_train_transform, build_eval_transform
+from glioma_sparse.data_utils.sampling import oversample_paths
 from glioma_sparse.models.factory import build_model
 from glioma_sparse.training.trainer import Trainer
+from glioma_sparse.evaluation.plots import (
+    plot_training_curves,
+    plot_confusion_matrix,
+    plot_roc_curve
+)
 
 
 # ============================================================
-# PATHS
+# EXPERIMENT CONFIG
 # ============================================================
+
+EXPERIMENT_NAME = f"{datetime.now():%Y%m%d_%H%M}_resnet18_os"
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DATA_DIR = REPO_ROOT / "scripts" / "output_thumbnails" / "included"
-OUT_DIR = REPO_ROOT / "scripts" / "training_output"
+DATA_DIR = REPO_ROOT / "data" / "included"
+
+BASE_OUT_DIR = REPO_ROOT / "training_output"
+OUT_DIR = BASE_OUT_DIR / EXPERIMENT_NAME
 SPLIT_CSV = OUT_DIR / "data_split.csv"
 
 
@@ -29,100 +41,66 @@ SPLIT_CSV = OUT_DIR / "data_split.csv"
 # ============================================================
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+USE_OVERSAMPLING = True
 USE_EXISTING_SPLIT = False
+
+BATCH_SIZE = 4
+NUM_EPOCHS = 150
 SEED = 42
 
-CLASS_NAMES = ["control", "low_grade", "high_grade"]
-
 
 # ============================================================
-# STRATIFIED SPLIT
+# UTIL FUNCTIONS
 # ============================================================
 
-def create_and_save_split(dataset, output_csv, seed=42):
+def save_config(output_dir, config_dict):
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with open(output_dir / "config.txt", "w") as f:
+        for k, v in config_dict.items():
+            f.write(f"{k}: {v}\n")
 
-    random.seed(seed)
 
-    class_to_indices = defaultdict(list)
-
-    for idx, label in enumerate(dataset.labels):
-        class_to_indices[label].append(idx)
-
-    train_idx, val_idx, test_idx = [], [], []
-
-    for label, indices in class_to_indices.items():
-
-        random.shuffle(indices)
-
-        n = len(indices)
-        n_train = int(0.8 * n)
-        n_val = int(0.1 * n)
-
-        # avoid empty val for small classes
-        if n >= 10:
-            n_val = max(1, n_val)
-        else:
-            n_val = 0
-
-        train_idx.extend(indices[:n_train])
-        val_idx.extend(indices[n_train:n_train + n_val])
-        test_idx.extend(indices[n_train + n_val:])
-
-    paths = dataset.paths
-
-    split_map = {}
-
-    for i in train_idx:
-        split_map[paths[i]] = "train"
-    for i in val_idx:
-        split_map[paths[i]] = "val"
-    for i in test_idx:
-        split_map[paths[i]] = "test"
-
-    output_csv.parent.mkdir(parents=True, exist_ok=True)
-
-    with open(output_csv, "w", newline="") as f:
+def save_split_csv(paths, splits, csv_path):
+    with open(csv_path, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["path", "split"])
-
-        for p in paths:
-            writer.writerow([str(p), split_map[p]])
-
-    print(f"Saved split to: {output_csv}")
-
-    return split_map
+        for p, s in zip(paths, splits):
+            writer.writerow([str(p), s])
 
 
 def load_split(csv_path):
-
     split_map = {}
-
     with open(csv_path, "r") as f:
         reader = csv.DictReader(f)
-
         for row in reader:
             split_map[Path(row["path"])] = row["split"]
-
-    print(f"Loaded split from: {csv_path}")
-
     return split_map
 
 
-def apply_split(dataset, split_map):
+def evaluate_model(model, loader, device):
+    model.eval()
 
-    train_paths, val_paths, test_paths = [], [], []
+    all_probs = []
+    all_labels = []
 
-    for path in dataset.paths:
-        split = split_map.get(path)
+    with torch.no_grad():
+        for imgs, labels in loader:
+            imgs = imgs.to(device)
+            labels = labels.to(device)
 
-        if split == "train":
-            train_paths.append(path)
-        elif split == "val":
-            val_paths.append(path)
-        elif split == "test":
-            test_paths.append(path)
+            outputs = model(imgs)
+            probs = torch.softmax(outputs, dim=1)
 
-    return train_paths, val_paths, test_paths
+            all_probs.append(probs.cpu().numpy())
+            all_labels.append(labels.cpu().numpy())
+
+    all_probs = np.concatenate(all_probs, axis=0)
+    all_labels = np.concatenate(all_labels, axis=0)
+
+    preds = np.argmax(all_probs, axis=1)
+
+    return all_labels, preds, all_probs
 
 
 # ============================================================
@@ -131,96 +109,119 @@ def apply_split(dataset, split_map):
 
 def main():
 
-    print("\n=== GLIOMA-SPARSE TRAINING ===\n")
+    print("\n=== TRAINING ===\n")
+    print("Experiment:", EXPERIMENT_NAME)
+    print("Device:", DEVICE)
 
-    print("Data directory:", DATA_DIR)
-    print("Output directory:", OUT_DIR)
-    print("Using device:", DEVICE, "\n")
-
-    # --------------------------------------------------------
-    # CLEAN OUTPUT DIR (only if creating new split)
-    # --------------------------------------------------------
-    if OUT_DIR.exists() and not USE_EXISTING_SPLIT:
-        shutil.rmtree(OUT_DIR)
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # --------------------------------------------------------
-    # BASE DATASET (no transforms)
+    # BASE DATASET
     # --------------------------------------------------------
     base_dataset = SlideDataset(
         root_dir=DATA_DIR,
         transform=None,
         patch_transform=None,
-        class_names=CLASS_NAMES
+        class_names=None
     )
 
+    paths = base_dataset.paths
+    labels = base_dataset.labels
+    class_names = base_dataset.classes
+
     # --------------------------------------------------------
-    # SPLIT
+    # SPLIT (STRATIFIED)
     # --------------------------------------------------------
     if USE_EXISTING_SPLIT and SPLIT_CSV.exists():
+
         split_map = load_split(SPLIT_CSV)
+
+        train_paths, val_paths, test_paths = [], [], []
+        train_labels, val_labels, test_labels = [], [], []
+
+        for p, l in zip(paths, labels):
+            s = split_map[p]
+            if s == "train":
+                train_paths.append(p); train_labels.append(l)
+            elif s == "val":
+                val_paths.append(p); val_labels.append(l)
+            else:
+                test_paths.append(p); test_labels.append(l)
+
     else:
-        split_map = create_and_save_split(base_dataset, SPLIT_CSV, seed=SEED)
-
-    train_paths, val_paths, test_paths = apply_split(base_dataset, split_map)
-
-    print("Train size:", len(train_paths))
-    print("Val size:  ", len(val_paths))
-    print("Test size: ", len(test_paths), "\n")
-
-    if len(val_paths) == 0:
-        print("WARNING: Validation set is empty. Metrics may fail.\n")
-
-    # --------------------------------------------------------
-    # DATASETS (clean, no hacks)
-    # --------------------------------------------------------
-    train_dataset = SlideDataset(
-        root_dir=DATA_DIR,
-        transform=build_train_transform(),
-        patch_transform=Patch(grid_size=8),
-        class_names=CLASS_NAMES,
-        paths=train_paths
-    )
-
-    val_dataset = SlideDataset(
-        root_dir=DATA_DIR,
-        transform=build_eval_transform(),
-        patch_transform=None,
-        class_names=CLASS_NAMES,
-        paths=val_paths if len(val_paths) > 0 else None
-    )
-
-    # --------------------------------------------------------
-    # DATALOADERS
-    # --------------------------------------------------------
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=1,
-        shuffle=True
-    )
-
-    val_loader = None
-
-    if len(val_paths) > 0:
-        val_loader = DataLoader(
-            val_dataset,
-            batch_size=1,
-            shuffle=False
+        train_paths, temp_paths, train_labels, temp_labels = train_test_split(
+            paths, labels, test_size=0.2, stratify=labels, random_state=SEED
         )
+
+        val_paths, test_paths, val_labels, test_labels = train_test_split(
+            temp_paths, temp_labels, test_size=0.5, stratify=temp_labels, random_state=SEED
+        )
+
+        splits = []
+        for p in paths:
+            if p in train_paths:
+                splits.append("train")
+            elif p in val_paths:
+                splits.append("val")
+            else:
+                splits.append("test")
+
+        save_split_csv(paths, splits, SPLIT_CSV)
+
+    print(f"Train: {len(train_paths)} | Val: {len(val_paths)} | Test: {len(test_paths)}")
+
+    # --------------------------------------------------------
+    # OVERSAMPLING
+    # --------------------------------------------------------
+    if USE_OVERSAMPLING:
+        train_paths, train_labels = oversample_paths(train_paths, train_labels)
+
+    # --------------------------------------------------------
+    # DATASETS
+    # --------------------------------------------------------
+    train_dataset = SlideDataset(DATA_DIR, build_train_transform(), Patch(8))
+    train_dataset.paths = train_paths
+    train_dataset.labels = train_labels
+
+    val_dataset = SlideDataset(DATA_DIR, build_eval_transform(), None)
+    val_dataset.paths = val_paths
+    val_dataset.labels = val_labels
+
+    test_dataset = SlideDataset(DATA_DIR, build_eval_transform(), None)
+    test_dataset.paths = test_paths
+    test_dataset.labels = test_labels
+
+    # --------------------------------------------------------
+    # LOADERS
+    # --------------------------------------------------------
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4, pin_memory=True)
+    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4, pin_memory=True)
 
     # --------------------------------------------------------
     # MODEL
     # --------------------------------------------------------
-    model = build_model("resnet18", num_classes=3)
-    model = model.to(DEVICE)
+    model = build_model("resnet18", num_classes=len(class_names))
+    model.to(DEVICE)
 
-    # --------------------------------------------------------
-    # LOSS + OPTIMIZER
-    # --------------------------------------------------------
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
     # --------------------------------------------------------
-    # TRAINER
+    # CONFIG LOG
+    # --------------------------------------------------------
+    save_config(OUT_DIR, {
+        "experiment_name": EXPERIMENT_NAME,
+        "model": "resnet18",
+        "epochs": NUM_EPOCHS,
+        "batch_size": BATCH_SIZE,
+        "oversampling": USE_OVERSAMPLING,
+        "device": DEVICE,
+        "dataset_size": len(paths),
+    })
+
+    # --------------------------------------------------------
+    # TRAIN
     # --------------------------------------------------------
     trainer = Trainer(
         model=model,
@@ -232,14 +233,43 @@ def main():
         output_dir=OUT_DIR
     )
 
+    start = time.time()
+    history = trainer.train(NUM_EPOCHS)
+    total_time = time.time() - start
+
+    print(f"\nTotal training time: {total_time:.2f} sec")
+
     # --------------------------------------------------------
-    # TRAIN
+    # TRAINING CURVES
     # --------------------------------------------------------
-    trainer.train(num_epochs=3)
+    plot_training_curves(history, OUT_DIR)
+
+    # --------------------------------------------------------
+    # TEST EVALUATION
+    # --------------------------------------------------------
+    print("\n=== TEST EVALUATION ===")
+
+    labels, preds, probs = evaluate_model(model, test_loader, DEVICE)
+
+    plot_confusion_matrix(
+        labels,
+        preds,
+        class_names,
+        OUT_DIR / "confusion_matrix.png"
+    )
+
+    plot_roc_curve(
+        labels,
+        probs,
+        class_names,
+        OUT_DIR / "roc_curve.png"
+    )
+
+    print("Saved evaluation plots.")
 
 
 # ============================================================
-# ENTRY POINT
+# ENTRY
 # ============================================================
 
 if __name__ == "__main__":
