@@ -12,7 +12,8 @@ class SlideDataset(Dataset):
         root_dir,
         transform=None,
         patch_transform=None,
-        class_names=None
+        class_names=None,
+        paths=None,   # 👈 NEW: optional subset (for splits)
     ):
         self.root_dir = Path(root_dir)
         self.transform = transform
@@ -47,24 +48,48 @@ class SlideDataset(Dataset):
             cls_name: i for i, cls_name in enumerate(self.classes)
         }
 
+        self.class_names = self.classes
+
         # --------------------------------------------------
         # Collect paths + labels
         # --------------------------------------------------
         self.paths = []
         self.labels = []
 
-        for cls in self.classes:
-            class_dir = self.root_dir / cls
+        if paths is not None:
+            # ----------------------------------------------
+            # Use predefined subset (from split)
+            # ----------------------------------------------
+            for p in paths:
+                p = Path(p)
 
-            for p in class_dir.iterdir():
-                if p.suffix.lower() in self.SUPPORTED_EXTS:
-                    self.paths.append(p)
-                    self.labels.append(self.class_to_idx[cls])
+                if not p.exists():
+                    raise RuntimeError(f"Path does not exist: {p}")
+
+                class_name = p.parent.name
+
+                if class_name not in self.class_to_idx:
+                    raise RuntimeError(
+                        f"Unknown class '{class_name}' for path: {p}"
+                    )
+
+                self.paths.append(p)
+                self.labels.append(self.class_to_idx[class_name])
+
+        else:
+            # ----------------------------------------------
+            # Standard full dataset scan
+            # ----------------------------------------------
+            for cls in self.classes:
+                class_dir = self.root_dir / cls
+
+                for p in class_dir.iterdir():
+                    if p.suffix.lower() in self.SUPPORTED_EXTS:
+                        self.paths.append(p)
+                        self.labels.append(self.class_to_idx[cls])
 
         if not self.paths:
             raise RuntimeError("No images found")
-
-        self.class_names = self.classes
 
     def __len__(self):
         return len(self.paths)
