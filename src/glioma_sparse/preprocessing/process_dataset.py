@@ -40,10 +40,9 @@ def process_wsi_folder(input_dir, output_dir, tissue_threshold=0.3):
 
             base_name = slide_path.stem + ".jpg"
 
-            # always generate first (no threshold filtering)
             result = create_wsi_thumbnail(
                 slide_path,
-                output_path=None,  # don't save yet
+                output_path=None,
                 tissue_threshold=None,
                 save_mask=False,
             )
@@ -61,7 +60,6 @@ def process_wsi_folder(input_dir, output_dir, tissue_threshold=0.3):
 
             img, tissue_fraction = result
 
-            # decide where to store
             if tissue_fraction < tissue_threshold:
                 out_file = low_dir / base_name
                 included = False
@@ -69,11 +67,19 @@ def process_wsi_folder(input_dir, output_dir, tissue_threshold=0.3):
                 out_file = included_dir / base_name
                 included = True
 
-            # save image
-            img.save(out_file, quality=90)
-
-            print("Tissue fraction: {:.3f}".format(tissue_fraction))
-            print("Saved to: {}\n".format(out_file))
+            try:
+                img.save(out_file, quality=90)
+                print("Tissue fraction: {:.3f}".format(tissue_fraction))
+                print("Saved to: {}\n".format(out_file))
+            except Exception as e:
+                print("Save failed: {}\n".format(e))
+                writer.writerow([
+                    str(slide_path),
+                    "",
+                    "{:.6f}".format(tissue_fraction),
+                    False
+                ])
+                continue
 
             writer.writerow([
                 str(slide_path),
