@@ -1,21 +1,14 @@
-<table>
-<tr>
-<td width="70%">
+<img align="right" src="docs/logo_small.png" width="250px" />
 
 # GLIOMA-SPARSE
-
 GLIOMA-SPARSE is a lightweight, interpretable computational pathology framework for glioma classification from routine H&E whole-slide images.
 
 The method follows a coarse-to-fine strategy:
-- Stage A: low-resolution analysis
-- Stage B: high-resolution analysis
+- Stage A: low-resolution analysis to identify informative regions
+  - Stage B: high-resolution analysis on selected regions
 
-</td>
-<td width="30%">
-<img src="https://raw.githubusercontent.com/T-AbdelAlim/Glioma-SPARSE/main/docs/logo_small.png" width="200"/>
-</td>
-</tr>
-</table>
+The goal is to minimize compute while preserving diagnostic signal.
+
 ---
 
 ## INDEX
