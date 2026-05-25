@@ -5,11 +5,11 @@ GLIOMA-SPARSE is a lightweight, interpretable computational pathology framework 
 
 The method follows a coarse-to-fine strategy:
 - Stage A: low-resolution analysis to identify informative regions
-  - Stage B: high-resolution analysis on selected regions
+- Stage B: high-resolution analysis on selected regions
 
 The goal is to minimize compute while preserving diagnostic signal.
+  
 
----
 
 ## INDEX
 
