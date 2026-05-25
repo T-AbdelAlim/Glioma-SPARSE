@@ -1,6 +1,6 @@
-<p align="left">
+<p align="center">
 
-![GLIOMA-SPARSE Logo](docs/logo.png)
+![GLIOMA-SPARSE Logo](docs/logo_small.png)
 
 </p>
 
