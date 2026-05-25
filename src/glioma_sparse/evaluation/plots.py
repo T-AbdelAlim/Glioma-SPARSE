@@ -1,6 +1,8 @@
+import matplotlib
+matplotlib.use("Agg")
+
 import numpy as np
 import matplotlib.pyplot as plt
-
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, roc_curve, auc
 from sklearn.preprocessing import label_binarize
 
@@ -63,17 +65,35 @@ def plot_training_curves(history, output_dir):
 # CONFUSION MATRIX
 # ============================================================
 
-def plot_confusion_matrix(labels, preds, class_names, out_path):
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 
-    cm = confusion_matrix(labels, preds)
+def plot_confusion_matrix(labels, preds, class_names, out_path, normalize=False):
 
-    disp = ConfusionMatrixDisplay(cm, display_labels=class_names)
-    disp.plot(cmap="Blues")
+    labels = np.array(labels)
+    preds = np.array(preds)
 
-    plt.title("Confusion Matrix")
+    cm = confusion_matrix(
+        labels,
+        preds,
+        labels=list(range(len(class_names)))
+    )
+
+    if normalize:
+        cm = cm.astype(float) / cm.sum(axis=1, keepdims=True)
+        cm = np.nan_to_num(cm)
+
+    disp = ConfusionMatrixDisplay(
+        confusion_matrix=cm,
+        display_labels=class_names
+    )
+
+    disp.plot()
+
+    title = "Confusion Matrix (Normalized)" if normalize else "Confusion Matrix"
+    plt.title(title)
+
     plt.savefig(out_path)
     plt.close()
-
 
 # ============================================================
 # ROC CURVES

@@ -5,12 +5,12 @@ from torchvision import models
 def build_model(name, num_classes, pretrained=True):
 
     if name == "resnet18":
-        model = models.resnet18(pretrained=pretrained)
+        model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
         in_features = model.fc.in_features
         model.fc = nn.Linear(in_features, num_classes)
 
     elif name == "resnet50":
-        model = models.resnet50(pretrained=pretrained)
+        model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
         in_features = model.fc.in_features
         model.fc = nn.Linear(in_features, num_classes)
 
