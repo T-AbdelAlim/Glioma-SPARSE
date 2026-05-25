@@ -16,7 +16,8 @@ The goal is to minimize compute while preserving diagnostic signal.
 2. [Repository Structure](#2-repository-structure)
 3. [Preprocessing](#3-preprocessing)
 4. [Stage A Pipeline (Current)](#4-stage-a-pipeline-current)
-5. [Outputs](#5-outputs)
+5. [Cluster Usage (SLURM)](#5-cluster-usage-slurm)
+6. [Outputs](#6-outputs)
 
 ---
 
@@ -83,7 +84,7 @@ configs/        → configuration files (future)
 data/           → processed thumbnails per class
 docs/           → documentation
 notebooks/      → experiments
-scripts/        → runnable scripts
+scripts/        → runnable scripts (entry points)
 
 src/
   glioma_sparse/
@@ -103,6 +104,7 @@ src/
 
     training/
       trainer.py
+      seeding.py        ← ensures reproducibility
 
     evaluation/
       metrics.py
@@ -198,7 +200,7 @@ Run:
 python scripts/train.py
 ```
 
-This is now a complete training pipeline.
+This is a complete, reproducible training pipeline.
 
 ---
 
@@ -211,19 +213,51 @@ SlideDataset
 ```
 
 - One thumbnail = one sample
-- Folder structure defines labels
-- Stores:
-  - paths
-  - labels
+- Explicit class order enforced:
+  
+```
+["control", "low_grade", "high_grade"]
+```
+
+- Ensures mapping:
+
+```
+0 = control  
+1 = low_grade  
+2 = high_grade
+```
+
 - Supports:
   - transforms
   - patch shuffling
+  - predefined splits via `paths`
 
 ---
 
-### 4.2 Train / Val / Test Split
+### 4.2 Reproducibility (IMPORTANT)
+
+Seeding is centralized:
+
+```
+glioma_sparse.training.seeding
+```
+
+Includes:
+- torch
+- numpy
+- random
+- CUDA
+
+Ensures:
+- deterministic splits
+- reproducible training runs
+
+---
+
+### 4.3 Train / Val / Test Split
 
 - Default: 80 / 10 / 10 split
+- Stratified on labels
 - Saved to:
 
 ```
@@ -236,13 +270,9 @@ training_output/<experiment_name>/data_split.csv
 USE_EXISTING_SPLIT = True
 ```
 
-Note:
-- For very small datasets, validation may be empty
-- Stratified splitting is recommended for real experiments
-
 ---
 
-### 4.3 Patch Shuffle (Core idea)
+### 4.4 Patch Shuffle (Core idea)
 
 Module:
 
@@ -258,40 +288,48 @@ Ensures stochasticity even with limited data.
 
 ---
 
-### 4.4 Oversampling (Class Balancing)
+### 4.5 Class Imbalance Handling
 
-Module:
+Two strategies:
 
-```
-data_utils/sampling.py
-```
-
-Usage:
+#### Option A — Oversampling
 
 ```
-if USE_OVERSAMPLING:
-    train_dataset.paths, train_dataset.labels = oversample_paths(...)
+USE_OVERSAMPLING = True
 ```
 
-- Balances class distribution
-- Applied before DataLoader
-- Combined with patch shuffle → unique samples
+- Balances dataset via duplication
+- Works well with patch shuffle
+
+#### Option B — Class-weighted loss (recommended)
+
+```
+USE_CLASS_WEIGHTED_LOSS = True
+```
+
+- Uses inverse frequency weighting
+- More stable than oversampling
+
+⚠️ Do NOT combine both unless carefully tuned.
 
 ---
 
-### 4.5 Model
+### 4.6 Model
 
 ```
 build_model("resnet18", num_classes=3)
 ```
 
-- Default: ResNet-18
-- Input: 2048 × 2048
-- Easily replaceable
+- Lightweight baseline
+- Suitable for resource-efficient experiments
+- Replaceable with:
+  - ResNet50
+  - EfficientNet
+  - custom architectures
 
 ---
 
-### 4.6 Training
+### 4.7 Training
 
 Handled by:
 
@@ -311,38 +349,39 @@ Includes:
   - per epoch
   - CSV output
 - Checkpointing:
-  - best AUC
-  - best F1
-  - best Accuracy
-  - last model
-  - optional per-epoch checkpoints
-- Early stopping
+  - best_auc.pth
+  - best_f1.pth
+  - best_acc.pth
+  - last.pth
+- Early stopping (optional)
 
 ---
 
-### 4.7 Evaluation Outputs
+### 4.8 Evaluation Outputs
 
-After training, the pipeline generates:
+Generated automatically:
 
 - Training curves:
   - loss_curve.png
   - auc_curve.png
   - f1_curve.png
   - accuracy_curve.png
-- Confusion matrix:
-  - confusion_matrix.png
-- ROC curve:
-  - roc_curve.png
 
-All plotting is handled via:
+- Confusion matrices:
+  - confusion_matrix_val_raw.png
+  - confusion_matrix_val_norm.png
+  - confusion_matrix_test_raw.png
+  - confusion_matrix_test_norm.png
 
-```
-glioma_sparse.evaluation.plots
-```
+- ROC curves:
+  - roc_curve_val.png
+  - roc_curve_test.png
+
+All plots use fixed class order.
 
 ---
 
-### 4.8 Compute Tracking
+### 4.9 Compute Tracking
 
 Trainer logs:
 
@@ -350,15 +389,70 @@ Trainer logs:
 - Total training time
 - AUC per hour
 
-Enables reporting of compute efficiency.
+Supports reporting of:
+- efficiency
+- scalability
 
 ---
 
-## 5. OUTPUTS
+## 5. CLUSTER USAGE (SLURM)
+
+Training can be run on GPU clusters (e.g. oaks-lab).
+
+---
+
+### 5.1 SLURM Script
+
+Example:
+
+```
+train_glioma_sparse.slurm
+```
+
+Uses:
+- 1 GPU
+- 8 CPUs
+- 64 GB RAM
+- containerized environment
+
+Key paths:
+
+```
+/data/pathology/projects/tareq/glioma-sparse
+```
+
+---
+
+### 5.2 Submit Job
+
+From project directory:
+
+```
+sbatch train_glioma_sparse.slurm
+```
+
+---
+
+### 5.3 Monitor Job
+
+```
+squeue -u $USER
+```
+
+Logs:
+
+```
+/home/<user>/logs/slurm-<jobid>.out
+```
+
+---
+
+## 6. OUTPUTS
 
 ```
 training_output/<experiment_name>/
 
+config.txt
 log.csv
 data_split.csv
 
@@ -366,14 +460,19 @@ best_auc.pth
 best_f1.pth
 best_acc.pth
 last.pth
-epoch_*.pth   (optional)
 
 loss_curve.png
 auc_curve.png
 f1_curve.png
 accuracy_curve.png
-confusion_matrix.png
-roc_curve.png
+
+confusion_matrix_val_raw.png
+confusion_matrix_val_norm.png
+confusion_matrix_test_raw.png
+confusion_matrix_test_norm.png
+
+roc_curve_val.png
+roc_curve_test.png
 ```
 
 ---
@@ -393,14 +492,14 @@ included
 ## NOTES
 
 - Thumbnails saved as JPG (quality=90)
+- Explicit class ordering enforced across:
+  - dataset
+  - training
+  - evaluation
 - Designed for:
   - local machines
   - GPU clusters
-- Uses:
-  - patch shuffling
-  - oversampling
-  - explicit dataset splits
-- Fully reproducible experiment folders
+- Fully reproducible experiment structure
 
 ---
 

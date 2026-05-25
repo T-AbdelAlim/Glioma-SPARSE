@@ -7,13 +7,18 @@ class SlideDataset(Dataset):
 
     SUPPORTED_EXTS = (".jpg", ".jpeg", ".png")
 
+    # --------------------------------------------------
+    # CLASS ORDER
+    # --------------------------------------------------
+    DEFAULT_CLASS_NAMES = ["control", "low_grade", "high_grade"]
+
     def __init__(
         self,
         root_dir,
         transform=None,
         patch_transform=None,
         class_names=None,
-        paths=None,   # 👈 NEW: optional subset (for splits)
+        paths=None,
     ):
         self.root_dir = Path(root_dir)
         self.transform = transform
@@ -23,54 +28,60 @@ class SlideDataset(Dataset):
             raise FileNotFoundError(self.root_dir)
 
         # --------------------------------------------------
-        # Classes (explicit or inferred)
+        # CLASS ORDER (ENFORCED)
         # --------------------------------------------------
-        if class_names is not None:
+        if class_names is None:
+            self.classes = self.DEFAULT_CLASS_NAMES
+        else:
             self.classes = class_names
 
-            missing = [c for c in class_names if not (self.root_dir / c).exists()]
-            if missing:
-                raise RuntimeError(
-                    "Missing class folders: {}".format(missing)
-                )
-        else:
-            self.classes = sorted([
-                d.name for d in self.root_dir.iterdir() if d.is_dir()
-            ])
+        # sanity check: folders exist
+        missing = []
+        for c in self.classes:
+            if not (self.root_dir / c).exists():
+                missing.append(c)
 
-        if not self.classes:
+        if len(missing) > 0:
             raise RuntimeError(
-                "No class folders found in {}".format(self.root_dir)
+                "Missing class folders: {}".format(missing)
             )
 
-        # deterministic mapping
+        # deterministic mapping (THIS is what you care about)
         self.class_to_idx = {
             cls_name: i for i, cls_name in enumerate(self.classes)
+        }
+
+        self.idx_to_class = {
+            i: cls_name for cls_name, i in self.class_to_idx.items()
         }
 
         self.class_names = self.classes
 
         # --------------------------------------------------
-        # Collect paths + labels
+        # COLLECT PATHS + LABELS
         # --------------------------------------------------
         self.paths = []
         self.labels = []
 
         if paths is not None:
             # ----------------------------------------------
-            # Use predefined subset (from split)
+            # Use predefined subset (split-safe)
             # ----------------------------------------------
             for p in paths:
                 p = Path(p)
 
                 if not p.exists():
-                    raise RuntimeError(f"Path does not exist: {p}")
+                    raise RuntimeError(
+                        "Path does not exist: {}".format(p)
+                    )
 
                 class_name = p.parent.name
 
                 if class_name not in self.class_to_idx:
                     raise RuntimeError(
-                        f"Unknown class '{class_name}' for path: {p}"
+                        "Unknown class '{}' for path: {}".format(
+                            class_name, p
+                        )
                     )
 
                 self.paths.append(p)
@@ -78,7 +89,7 @@ class SlideDataset(Dataset):
 
         else:
             # ----------------------------------------------
-            # Standard full dataset scan
+            # Full dataset scan
             # ----------------------------------------------
             for cls in self.classes:
                 class_dir = self.root_dir / cls
@@ -88,7 +99,7 @@ class SlideDataset(Dataset):
                         self.paths.append(p)
                         self.labels.append(self.class_to_idx[cls])
 
-        if not self.paths:
+        if len(self.paths) == 0:
             raise RuntimeError("No images found")
 
     def __len__(self):
@@ -102,13 +113,13 @@ class SlideDataset(Dataset):
         img = Image.open(path).convert("RGB")
 
         # --------------------------------------------------
-        # Patch shuffle (train-time augmentation)
+        # PATCH SHUFFLE
         # --------------------------------------------------
         if self.patch_transform is not None:
             img = self.patch_transform(img)
 
         # --------------------------------------------------
-        # Normalization / tensor conversion
+        # TRANSFORMS
         # --------------------------------------------------
         if self.transform is not None:
             img = self.transform(img)

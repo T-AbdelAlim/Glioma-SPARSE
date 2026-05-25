@@ -3,8 +3,10 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from pathlib import Path
 import csv
+import json
 import time
 from datetime import datetime
+from collections import Counter
 
 import numpy as np
 from sklearn.model_selection import train_test_split
@@ -18,22 +20,20 @@ from glioma_sparse.training.trainer import Trainer
 from glioma_sparse.evaluation.plots import (
     plot_training_curves,
     plot_confusion_matrix,
-    plot_roc_curve
+    plot_roc_curve,
 )
+from glioma_sparse.training.seeding import set_seed, seed_worker
 
 
 # ============================================================
 # EXPERIMENT CONFIG
 # ============================================================
 
-EXPERIMENT_NAME = f"{datetime.now():%Y%m%d_%H%M}_resnet18_os"
+EXPERIMENT_NAME = None   # set to a string to override; None auto-generates from settings
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = REPO_ROOT / "data" / "included"
-
 BASE_OUT_DIR = REPO_ROOT / "training_output"
-OUT_DIR = BASE_OUT_DIR / EXPERIMENT_NAME
-SPLIT_CSV = OUT_DIR / "data_split.csv"
 
 
 # ============================================================
@@ -42,23 +42,39 @@ SPLIT_CSV = OUT_DIR / "data_split.csv"
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-USE_OVERSAMPLING = True
+USE_OVERSAMPLING = False
+USE_CLASS_WEIGHTED_LOSS = True
 USE_EXISTING_SPLIT = False
 
-BATCH_SIZE = 4
-NUM_EPOCHS = 50
+BEST_CHECKPOINT_METRIC = "auc"   # "auc", "f1", or "acc"
+
+BATCH_SIZE = 2
+NUM_EPOCHS = 2
+NUM_WORKERS = 4
+LEARNING_RATE = 1e-4
 SEED = 42
 
+CLASS_ORDER = ["control", "low_grade", "high_grade"]
+
 
 # ============================================================
-# UTIL FUNCTIONS
+# UTILITIES
 # ============================================================
+
+def build_experiment_name():
+    parts = ["resnet18"]
+    if USE_OVERSAMPLING:
+        parts.append("os")
+    if USE_CLASS_WEIGHTED_LOSS:
+        parts.append("cw")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    return f"{timestamp}_{'_'.join(parts)}"
+
 
 def save_config(output_dir, config_dict):
     output_dir.mkdir(parents=True, exist_ok=True)
-    with open(output_dir / "config.txt", "w") as f:
-        for k, v in config_dict.items():
-            f.write(f"{k}: {v}\n")
+    with open(output_dir / "config.json", "w") as f:
+        json.dump(config_dict, f, indent=2, default=str)
 
 
 def save_split_csv(paths, splits, csv_path):
@@ -76,6 +92,22 @@ def load_split(csv_path):
         for row in reader:
             split_map[Path(row["path"])] = row["split"]
     return split_map
+
+
+def compute_class_weights(train_labels, num_classes, device):
+    counts = Counter(train_labels)
+    total = sum(counts.values())
+
+    weights = []
+    for i in range(num_classes):
+        if i not in counts:
+            raise ValueError(
+                f"Class index {i} ({CLASS_ORDER[i]}) has no training samples. "
+                f"Cannot compute class-weighted loss."
+            )
+        weights.append(total / (num_classes * counts[i]))
+
+    return torch.tensor(weights, dtype=torch.float32, device=device)
 
 
 def evaluate_model(model, loader, device):
@@ -97,7 +129,6 @@ def evaluate_model(model, loader, device):
 
     all_probs = np.concatenate(all_probs, axis=0)
     all_labels = np.concatenate(all_labels, axis=0)
-
     preds = np.argmax(all_probs, axis=1)
 
     return all_labels, preds, all_probs
@@ -109,11 +140,26 @@ def evaluate_model(model, loader, device):
 
 def main():
 
-    print("\n=== TRAINING ===\n")
-    print("Experiment:", EXPERIMENT_NAME)
-    print("Device:", DEVICE)
+    # --------------------------------------------------------
+    # SANITY CHECKS
+    # --------------------------------------------------------
+    assert not (USE_OVERSAMPLING and USE_CLASS_WEIGHTED_LOSS), \
+        "Use either oversampling or class-weighted loss, not both"
 
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    # --------------------------------------------------------
+    # SETUP
+    # --------------------------------------------------------
+    set_seed(SEED)
+
+    experiment_name = EXPERIMENT_NAME or build_experiment_name()
+    out_dir = BASE_OUT_DIR / experiment_name
+    split_csv = out_dir / "data_split.csv"
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    print("\n=== TRAINING ===\n")
+    print("Experiment:", experiment_name)
+    print("Device:", DEVICE)
 
     # --------------------------------------------------------
     # BASE DATASET
@@ -122,19 +168,21 @@ def main():
         root_dir=DATA_DIR,
         transform=None,
         patch_transform=None,
-        class_names=None
+        class_names=CLASS_ORDER,
     )
 
     paths = base_dataset.paths
     labels = base_dataset.labels
     class_names = base_dataset.classes
 
+    assert len(paths) > 0, f"No data found in {DATA_DIR}"
+
     # --------------------------------------------------------
     # SPLIT (STRATIFIED)
     # --------------------------------------------------------
-    if USE_EXISTING_SPLIT and SPLIT_CSV.exists():
+    if USE_EXISTING_SPLIT and split_csv.exists():
 
-        split_map = load_split(SPLIT_CSV)
+        split_map = load_split(split_csv)
 
         train_paths, val_paths, test_paths = [], [], []
         train_labels, val_labels, test_labels = [], [], []
@@ -149,24 +197,36 @@ def main():
                 test_paths.append(p); test_labels.append(l)
 
     else:
-        train_paths, temp_paths, train_labels, temp_labels = train_test_split(
-            paths, labels, test_size=0.2, stratify=labels, random_state=SEED
-        )
 
-        val_paths, test_paths, val_labels, test_labels = train_test_split(
-            temp_paths, temp_labels, test_size=0.5, stratify=temp_labels, random_state=SEED
-        )
+        try:
+            train_paths, temp_paths, train_labels, temp_labels = train_test_split(
+                paths, labels, test_size=0.2, stratify=labels, random_state=SEED
+            )
 
+            val_paths, test_paths, val_labels, test_labels = train_test_split(
+                temp_paths, temp_labels, test_size=0.5, stratify=temp_labels, random_state=SEED
+            )
+
+        except ValueError as e:
+            class_counts = Counter(labels)
+            raise RuntimeError(
+                f"Stratified split failed. Class counts: {dict(class_counts)}. "
+                f"You likely have too few samples per class for an 80/10/10 split. "
+                f"Original error: {e}"
+            ) from e
+
+        train_set = set(train_paths)
+        val_set = set(val_paths)
         splits = []
         for p in paths:
-            if p in train_paths:
+            if p in train_set:
                 splits.append("train")
-            elif p in val_paths:
+            elif p in val_set:
                 splits.append("val")
             else:
                 splits.append("test")
 
-        save_split_csv(paths, splits, SPLIT_CSV)
+        save_split_csv(paths, splits, split_csv)
 
     print(f"Train: {len(train_paths)} | Val: {len(val_paths)} | Test: {len(test_paths)}")
 
@@ -179,45 +239,106 @@ def main():
     # --------------------------------------------------------
     # DATASETS
     # --------------------------------------------------------
-    train_dataset = SlideDataset(DATA_DIR, build_train_transform(), Patch(8))
-    train_dataset.paths = train_paths
-    train_dataset.labels = train_labels
+    train_dataset = SlideDataset(
+        DATA_DIR,
+        transform=build_train_transform(),
+        patch_transform=Patch(8),
+        class_names=CLASS_ORDER,
+        paths=train_paths,
+    )
 
-    val_dataset = SlideDataset(DATA_DIR, build_eval_transform(), None)
-    val_dataset.paths = val_paths
-    val_dataset.labels = val_labels
+    val_dataset = SlideDataset(
+        DATA_DIR,
+        transform=build_eval_transform(),
+        patch_transform=None,
+        class_names=CLASS_ORDER,
+        paths=val_paths,
+    )
 
-    test_dataset = SlideDataset(DATA_DIR, build_eval_transform(), None)
-    test_dataset.paths = test_paths
-    test_dataset.labels = test_labels
+    test_dataset = SlideDataset(
+        DATA_DIR,
+        transform=build_eval_transform(),
+        patch_transform=None,
+        class_names=CLASS_ORDER,
+        paths=test_paths,
+    )
 
     # --------------------------------------------------------
     # LOADERS
     # --------------------------------------------------------
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4, pin_memory=True)
-    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4, pin_memory=True)
+    pin_memory = torch.cuda.is_available()
+    persistent = NUM_WORKERS > 0
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        num_workers=NUM_WORKERS,
+        worker_init_fn=seed_worker,
+        pin_memory=pin_memory,
+        persistent_workers=persistent,
+    )
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=False,
+        num_workers=NUM_WORKERS,
+        worker_init_fn=seed_worker,
+        pin_memory=pin_memory,
+        persistent_workers=persistent,
+    )
+
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=False,
+        num_workers=NUM_WORKERS,
+        worker_init_fn=seed_worker,
+        pin_memory=pin_memory,
+        persistent_workers=persistent,
+    )
 
     # --------------------------------------------------------
-    # MODEL
+    # MODEL + LOSS + OPTIMIZER
     # --------------------------------------------------------
     model = build_model("resnet18", num_classes=len(class_names))
     model.to(DEVICE)
 
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    if USE_CLASS_WEIGHTED_LOSS:
+        class_weights = compute_class_weights(train_labels, len(CLASS_ORDER), DEVICE)
+        criterion = nn.CrossEntropyLoss(weight=class_weights)
+        class_weights_list = class_weights.cpu().tolist()
+    else:
+        criterion = nn.CrossEntropyLoss()
+        class_weights_list = None
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
     # --------------------------------------------------------
     # CONFIG LOG
     # --------------------------------------------------------
-    save_config(OUT_DIR, {
-        "experiment_name": EXPERIMENT_NAME,
+    save_config(out_dir, {
+        "experiment_name": experiment_name,
         "model": "resnet18",
+        "num_classes": len(CLASS_ORDER),
+        "class_order": CLASS_ORDER,
         "epochs": NUM_EPOCHS,
         "batch_size": BATCH_SIZE,
-        "oversampling": USE_OVERSAMPLING,
+        "num_workers": NUM_WORKERS,
+        "learning_rate": LEARNING_RATE,
+        "optimizer": "Adam",
+        "seed": SEED,
         "device": DEVICE,
+        "use_oversampling": USE_OVERSAMPLING,
+        "use_class_weighted_loss": USE_CLASS_WEIGHTED_LOSS,
+        "class_weights": class_weights_list,
+        "best_checkpoint_metric": BEST_CHECKPOINT_METRIC,
+        "data_dir": str(DATA_DIR),
         "dataset_size": len(paths),
+        "train_size": len(train_paths),
+        "val_size": len(val_paths),
+        "test_size": len(test_paths),
     })
 
     # --------------------------------------------------------
@@ -230,61 +351,97 @@ def main():
         optimizer=optimizer,
         criterion=criterion,
         device=DEVICE,
-        output_dir=OUT_DIR
+        output_dir=out_dir,
     )
 
     start = time.time()
-    history, probs, labels = trainer.train(NUM_EPOCHS)
+    history, _, _ = trainer.train(NUM_EPOCHS)
     total_time = time.time() - start
 
-    print(f"\nTotal training time: {total_time:.2f} sec")
+    print("\nTotal training time: {:.2f} sec".format(total_time))
 
     # --------------------------------------------------------
-    # TRAINING AND EVALUATION METRICS
+    # TRAINING CURVES
     # --------------------------------------------------------
-    # 1. Training curves
-    plot_training_curves(history, OUT_DIR)
+    plot_training_curves(history, out_dir)
 
-    # 2. Confusion matrix + ROC
-    if probs is not None and labels is not None:
-        preds = probs.argmax(axis=1)
-        class_names = base_dataset.classes
+    # --------------------------------------------------------
+    # RELOAD BEST CHECKPOINT FOR FINAL EVALUATION
+    # --------------------------------------------------------
+    best_model_path = out_dir / f"best_{BEST_CHECKPOINT_METRIC}.pth"
 
-        plot_confusion_matrix(
-            labels,
-            preds,
-            class_names,
-            OUT_DIR / "confusion_matrix.png"
+    if not best_model_path.exists():
+        raise FileNotFoundError(
+            f"Best checkpoint not found at {best_model_path}. "
+            f"Training may have ended before any improvement was recorded."
         )
 
-        plot_roc_curve(
-            labels,
-            probs,
-            class_names,
-            OUT_DIR / "roc_curve.png"
-        )
-    # --------------------------------------------------------
-    # TEST EVALUATION
-    # --------------------------------------------------------
-    print("\n=== TEST EVALUATION ===")
+    model.load_state_dict(torch.load(best_model_path, map_location=DEVICE, weights_only=True))
+    model.to(DEVICE)
 
-    labels, preds, probs = evaluate_model(model, test_loader, DEVICE)
+    print(f"\nLoaded best checkpoint ({BEST_CHECKPOINT_METRIC}) from {best_model_path}")
+
+    # --------------------------------------------------------
+    # VALIDATION EVALUATION (on best checkpoint)
+    # --------------------------------------------------------
+    print("\n=== VALIDATION EVALUATION ===")
+
+    val_labels_arr, val_preds, val_probs = evaluate_model(model, val_loader, DEVICE)
 
     plot_confusion_matrix(
-        labels,
-        preds,
-        class_names,
-        OUT_DIR / "confusion_matrix.png"
+        val_labels_arr,
+        val_preds,
+        CLASS_ORDER,
+        out_dir / "confusion_matrix_val_raw.png",
+        normalize=False,
+    )
+
+    plot_confusion_matrix(
+        val_labels_arr,
+        val_preds,
+        CLASS_ORDER,
+        out_dir / "confusion_matrix_val_norm.png",
+        normalize=True,
     )
 
     plot_roc_curve(
-        labels,
-        probs,
-        class_names,
-        OUT_DIR / "roc_curve.png"
+        val_labels_arr,
+        val_probs,
+        CLASS_ORDER,
+        out_dir / "roc_curve_val.png",
     )
 
-    print("Saved evaluation plots.")
+    # --------------------------------------------------------
+    # TEST EVALUATION (on best checkpoint)
+    # --------------------------------------------------------
+    print("\n=== TEST EVALUATION ===")
+
+    test_labels_arr, test_preds, test_probs = evaluate_model(model, test_loader, DEVICE)
+
+    plot_confusion_matrix(
+        test_labels_arr,
+        test_preds,
+        CLASS_ORDER,
+        out_dir / "confusion_matrix_test_raw.png",
+        normalize=False,
+    )
+
+    plot_confusion_matrix(
+        test_labels_arr,
+        test_preds,
+        CLASS_ORDER,
+        out_dir / "confusion_matrix_test_norm.png",
+        normalize=True,
+    )
+
+    plot_roc_curve(
+        test_labels_arr,
+        test_probs,
+        CLASS_ORDER,
+        out_dir / "roc_curve_test.png",
+    )
+
+    print("\nSaved evaluation plots.")
 
 
 # ============================================================
