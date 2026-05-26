@@ -256,7 +256,7 @@ def run_single_inference(
 if __name__ == "__main__":
 
     run_single_inference(
-        input_path=r"D:\Thinkpad_Backup\Data\WSI_datasets\EMC_data\Set_2\LMS-6-2302721 - 2026-04-02 08.54.04.ndpi",
+        input_path=r"D:\Thinkpad_Backup\Data\WSI_datasets\EMC_data\Set_2\LMS-6-2310280 - 2026-04-08 11.49.13.ndpi",
         checkpoint_path=r"C:\Users\Tareq\pythonProject\Glioma-SPARSE\training_output\20260526_0947_resnet34_cw\best_acc.pth",
         control_image_path=r"C:\Users\Tareq\pythonProject\Glioma-SPARSE\data\ebrains_thumbnails\control\included\86242943-7775-11eb-827d-001a7dda7111.jpg",
         model_name="resnet34",
