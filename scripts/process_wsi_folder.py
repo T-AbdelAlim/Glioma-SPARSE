@@ -29,6 +29,7 @@ THRESHOLD_METRIC = "effective"
 
 NUM_WORKERS = 6
 
+
 # ============================================================
 # MAIN
 # ============================================================
@@ -37,7 +38,9 @@ def main():
 
     print("\n=== GLIOMA-SPARSE BATCH PROCESSING ===\n")
 
-    print(f"Workers per class: {NUM_WORKERS}\n")
+    print(f"Workers per class: {NUM_WORKERS}")
+    print(f"Tissue threshold:  {TISSUE_THRESHOLD} ({THRESHOLD_METRIC})")
+    print("Each thumbnail is saved with a matching .json mapping sidecar\n")
 
     for cls in CLASS_FOLDERS:
 
@@ -59,7 +62,7 @@ def main():
             output_dir=output_dir,
             tissue_threshold=TISSUE_THRESHOLD,
             threshold_metric=THRESHOLD_METRIC,
-            num_workers=NUM_WORKERS,   # 👈 THIS is the only real change
+            num_workers=NUM_WORKERS,
         )
 
     print("\n=== ALL CLASSES PROCESSED ===\n")
