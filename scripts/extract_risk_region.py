@@ -72,6 +72,62 @@ def save_overlay(image, risk_map, save_path):
 
     cv2.imwrite(str(save_path), overlay)
 
+def save_grid_risk_overlay(image, risk_map, save_path, alpha=0.6):
+
+    img = np.array(image)
+    h, w, _ = img.shape
+
+    grid_h, grid_w = risk_map.shape
+
+    cell_h = h / grid_h
+    cell_w = w / grid_w
+
+    # Normalize risk
+    risk_norm = (risk_map - risk_map.min()) / (risk_map.max() + 1e-8)
+
+    cmap = plt.get_cmap("jet")
+
+    fig, ax = plt.subplots(figsize=(10, 10))
+    ax.imshow(img)
+
+    # --------------------------------------------------------
+    # 🔥 FLATTEN + SORT (KEY CHANGE)
+    # --------------------------------------------------------
+    cells = []
+    for i in range(grid_h):
+        for j in range(grid_w):
+            cells.append((risk_norm[i, j], i, j))
+
+    # sort ascending → low first, high last
+    cells.sort(key=lambda x: x[0])
+
+    # --------------------------------------------------------
+    # DRAW IN ORDER
+    # --------------------------------------------------------
+    for r, i, j in cells:
+
+        color = cmap(r)
+
+        y = int(i * cell_h)
+        x = int(j * cell_w)
+
+        rect = plt.Rectangle(
+            (x, y),
+            int(cell_w),
+            int(cell_h),
+            linewidth=1 + 3 * r,   # your thickness scaling
+            edgecolor=color,
+            facecolor='none',
+            alpha=alpha
+        )
+
+        ax.add_patch(rect)
+
+    ax.set_title("Grid Risk Map")
+    ax.axis("off")
+
+    plt.savefig(save_path, bbox_inches="tight", dpi=200)
+    plt.close()
 
 # ============================================================
 # MAIN FUNCTION
@@ -84,17 +140,24 @@ def run_single_inference(
     model_name="resnet34",
     k=5,
     extract_patches=True,
-    output_dir=None,
+    output_root=None,
 ):
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     input_path = Path(input_path)
-    checkpoint_path = Path(checkpoint_path)
-    control_image_path = Path(control_image_path)
 
-    output_dir = Path(output_dir) if output_dir else input_path.parent / "risk_output"
+    run_name = f"risk_output_{input_path.stem}"
+
+    if output_root is None:
+        # default: next to WSI
+        output_dir = input_path.parent / run_name
+    else:
+        # custom root
+        output_dir = Path(output_root) / run_name
+
     output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Saving results to: {output_dir}")
 
     tmp_dir = output_dir / "tmp"
     tmp_dir.mkdir(exist_ok=True)
@@ -148,16 +211,18 @@ def run_single_inference(
     # --------------------------------------------------------
     # SAVE HEATMAP
     # --------------------------------------------------------
-    heatmap_path = output_dir / "risk_map.png"
-    save_heatmap(risk_map, heatmap_path)
+    grid_path = output_dir / "grid_risk_map.jpg"
+    save_grid_risk_overlay(target_img, risk_map, grid_path)
+
+    print(f"Saved grid risk map: {grid_path}")
 
     # --------------------------------------------------------
     # SAVE OVERLAY
     # --------------------------------------------------------
-    overlay_path = output_dir / "overlay.png"
+    overlay_path = output_dir / "overlay.jpg"
     save_overlay(target_img, risk_map, overlay_path)
 
-    print(f"Saved heatmap: {heatmap_path}")
+    print(f"Saved heatmap: {grid_path}")
     print(f"Saved overlay: {overlay_path}")
 
     # --------------------------------------------------------
@@ -191,7 +256,7 @@ def run_single_inference(
 if __name__ == "__main__":
 
     run_single_inference(
-        input_path=r"D:\Thinkpad_Backup\Documents\EMC_postdoc\Virtual_Biopsy\data\WSI_ebrains\WHO2021_data\GBM_IDHwt\GBM_IDHwt\a194f783-357f-11eb-9ee2-001a7dda7111.ndpi",
+        input_path=r"D:\Thinkpad_Backup\Data\WSI_datasets\EMC_data\Set_2\LMS-6-2302721 - 2026-04-02 08.54.04.ndpi",
         checkpoint_path=r"C:\Users\Tareq\pythonProject\Glioma-SPARSE\training_output\20260526_0947_resnet34_cw\best_acc.pth",
         control_image_path=r"C:\Users\Tareq\pythonProject\Glioma-SPARSE\data\ebrains_thumbnails\control\included\86242943-7775-11eb-827d-001a7dda7111.jpg",
         model_name="resnet34",
