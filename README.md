@@ -8,7 +8,7 @@ The method follows a coarse-to-fine strategy:
 - Stage B: high-resolution analysis on selected regions
 
 The goal is to minimize compute while preserving diagnostic signal.
-  
+
 
 
 ## INDEX
@@ -17,8 +17,9 @@ The goal is to minimize compute while preserving diagnostic signal.
 2. [Repository Structure](#2-repository-structure)
 3. [Preprocessing](#3-preprocessing)
 4. [Stage A Pipeline (Current)](#4-stage-a-pipeline-current)
-5. [Cluster Usage (SLURM)](#5-cluster-usage-slurm)
-6. [Outputs](#6-outputs)
+5. [Patch Injection and High-Resolution Extraction](#5-patch-injection-and-high-resolution-extraction)
+6. [Cluster Usage (SLURM)](#6-cluster-usage-slurm)
+7. [Outputs](#7-outputs)
 
 ---
 
@@ -65,7 +66,7 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 
 ### OpenSlide (Windows requirement)
 
-Download binaries:  
+Download binaries:
 https://openslide.org/download/
 
 Add to PATH:
@@ -91,8 +92,8 @@ src/
   glioma_sparse/
 
     preprocessing/
-      create_wsi_thumbnail.py
-      process_dataset.py
+      create_wsi_thumbnail.py   → single-WSI thumbnail + mapping sidecar
+      process_dataset.py        → batch preprocessing + CSV log
 
     data_utils/
       slide_dataset.py
@@ -101,7 +102,7 @@ src/
       sampling.py
 
     models/
-      factory/
+      factory.py
 
     training/
       trainer.py
@@ -111,6 +112,11 @@ src/
       metrics.py
       plots.py
 
+    interpret/                  ← Stage A interpretability + Stage B input generation
+      wsi_mapping.py            → thumbnail ↔ WSI level-0 coordinate mapping
+      patch_injection.py        → risk map by injecting target patches into a control
+      highres_extraction.py     → top-k high-resolution patch extraction from the WSI
+
 tests/
 ```
 
@@ -118,7 +124,7 @@ tests/
 
 ## 3. PREPROCESSING
 
-Converts WSIs into thumbnails + tissue metrics.
+Converts WSIs into thumbnails + tissue metrics + a mapping sidecar.
 
 ---
 
@@ -138,16 +144,38 @@ img, tissue_fraction, effective_tissue_fraction
 
 Steps:
 1. Read WSI (OpenSlide)
-2. Downsample to target MPP
+2. Downsample to target MPP (physical resolution in µm per pixel)
 3. Compute tissue mask
 4. Compute tissue_fraction (before padding)
 5. Pad to square
-6. Resize
+6. Resize to thumbnail size
 7. Compute effective_tissue_fraction (after resizing)
+8. Write mapping sidecar (`<slide_id>.json`) when an output_path is provided
 
 ---
 
-### 3.2 Dataset Processing
+### 3.2 Mapping Sidecar (IMPORTANT for Stage B)
+
+Each thumbnail JPG is accompanied by a `<slide_id>.json` sidecar containing every parameter needed to map a thumbnail-pixel bounding box back to WSI level-0 pixel coordinates without re-opening the slide:
+
+```json
+{
+  "wsi_path": "/data/.../slide.svs",
+  "wsi_level0_dim": [60000, 50000],
+  "base_mpp": 0.5001,
+  "target_mpp": 4.0,
+  "tissue_image_dim": [7500, 6249],
+  "canvas_size": 7500,
+  "tissue_offset_in_canvas": [0, 626],
+  "thumbnail_size": 2048
+}
+```
+
+These sidecars are required by `interpret/` for Stage B (re-extracting high-resolution patches from selected thumbnail regions). Old thumbnails generated before sidecar support need to be re-preprocessed.
+
+---
+
+### 3.3 Dataset Processing
 
 Function:
 
@@ -157,7 +185,7 @@ process_wsi_folder()
 
 What it does:
 - Recursively finds WSIs (.svs, .ndpi, .mrxs, .tif, .tiff)
-- Generates thumbnails
+- Generates thumbnails (+ sidecars)
 - Computes:
   - tissue_fraction
   - effective_tissue_fraction
@@ -174,7 +202,7 @@ python scripts/demo_wsi_to_thumbnail.py
 
 ---
 
-### 3.3 Key Concepts
+### 3.4 Key Concepts
 
 #### tissue_fraction
 - Computed before padding
@@ -215,7 +243,7 @@ SlideDataset
 
 - One thumbnail = one sample
 - Explicit class order enforced:
-  
+
 ```
 ["control", "low_grade", "high_grade"]
 ```
@@ -223,8 +251,8 @@ SlideDataset
 - Ensures mapping:
 
 ```
-0 = control  
-1 = low_grade  
+0 = control
+1 = low_grade
 2 = high_grade
 ```
 
@@ -240,7 +268,7 @@ SlideDataset
 Seeding is centralized:
 
 ```
-glioma_sparse.training.seeding
+glioma_sparse.utils.seeding
 ```
 
 Includes:
@@ -248,6 +276,7 @@ Includes:
 - numpy
 - random
 - CUDA
+- per-worker DataLoader seeds
 
 Ensures:
 - deterministic splits
@@ -285,7 +314,7 @@ Patch(grid_size=8)
 - Randomly permutes patches
 - Applied at every sample access
 
-Ensures stochasticity even with limited data.
+Ensures the model is invariant to tile position, which is a prerequisite for the patch-injection interpretability of Stage A (Section 5).
 
 ---
 
@@ -308,10 +337,13 @@ USE_OVERSAMPLING = True
 USE_CLASS_WEIGHTED_LOSS = True
 ```
 
-- Uses inverse frequency weighting
+- Uses normalised inverse-frequency weighting:
+  `w_i = total / (num_classes * count_i)`
+- Weights average to 1.0 in the balanced case, so loss magnitudes are
+  comparable to an unweighted run.
 - More stable than oversampling
 
-⚠️ Do NOT combine both unless carefully tuned.
+The two strategies are mutually exclusive (an assertion enforces this).
 
 ---
 
@@ -324,8 +356,8 @@ build_model("resnet18", num_classes=3)
 - Lightweight baseline
 - Suitable for resource-efficient experiments
 - Replaceable with:
+  - ResNet34
   - ResNet50
-  - EfficientNet
   - custom architectures
 
 ---
@@ -356,6 +388,8 @@ Includes:
   - last.pth
 - Early stopping (optional)
 
+Final validation and test evaluation are run on the best checkpoint (selected by `BEST_CHECKPOINT_METRIC`, default "auc"), not on the last-epoch state.
+
 ---
 
 ### 4.8 Evaluation Outputs
@@ -378,7 +412,7 @@ Generated automatically:
   - roc_curve_val.png
   - roc_curve_test.png
 
-All plots use fixed class order.
+All plots use the fixed class order.
 
 ---
 
@@ -396,13 +430,109 @@ Supports reporting of:
 
 ---
 
-## 5. CLUSTER USAGE (SLURM)
+## 5. PATCH INJECTION AND HIGH-RESOLUTION EXTRACTION
+
+The `interpret/` module turns Stage A predictions into spatially-localised explanations and, in the same step, produces the high-resolution patches that feed Stage B.
+
+---
+
+### 5.1 Patch-Injection Risk Map
+
+Module:
+
+```
+glioma_sparse.interpret.patch_injection
+```
+
+Idea. For a target slide that Stage A predicts as class `p`, replace the tile at position (r, c) of a control slide with the target slide's tile at the same position, run the model on the modified image, and record how much the predicted probability of class `p` changes. The control slide is shuffled once with a fixed seed so that its own tile arrangement carries no positional information.
+
+```
+risk_map[r, c] = P_with_injected_target_tile(class p)  -  P_control_alone(class p)
+```
+
+Positive values mean the injected tile increased the model's confidence in class `p`. Higher values therefore mean "more indicative of class p".
+
+Why this works for our pipeline. Training uses random patch permutation (Section 4.4), which makes the model invariant to tile position, so the risk score reflects only the tile's content rather than its location on the slide.
+
+Usage:
+
+```python
+from glioma_sparse.interpret import compute_risk_map
+
+risk_map, target_class = compute_risk_map(
+    target_img=target_thumbnail,
+    control_img=control_thumbnail,
+    model=stage_a_model,
+    transform=eval_transform,
+    grid=(8, 8),
+    device="cuda",
+)
+```
+
+---
+
+### 5.2 Coordinate Mapping (Thumbnail → WSI)
+
+Module:
+
+```
+glioma_sparse.interpret.wsi_mapping
+```
+
+A naive mapping `scale = wsi_dim / thumbnail_dim` is wrong, because the thumbnail goes through three transformations during preprocessing:
+
+1. WSI level 0 resampled to target MPP, producing a tissue image of size `(Wt, Ht)`.
+2. Tissue image padded to a square canvas of side `S = max(Wt, Ht)`.
+3. Canvas resized to the final thumbnail size `T` (e.g. 2048).
+
+Each thumbnail's sidecar (Section 3.2) records every parameter of these transformations, so the mapping is recovered exactly without re-opening the WSI:
+
+```python
+from glioma_sparse.interpret import load_mapping, thumbnail_bbox_to_wsi
+
+mapping  = load_mapping("path/to/thumbnail.jpg")
+wsi_bbox = thumbnail_bbox_to_wsi(mapping, (px_left, py_top, px_right, py_bottom))
+# wsi_bbox = (wx, wy, ww, wh) suitable for openslide.read_region((wx, wy), 0, (ww, wh))
+# or None if the thumbnail bbox falls entirely in padding
+```
+
+The function handles padding correctly: a tile that overlaps the padding band is automatically clipped to the tissue region before being mapped, and a tile that lies entirely in padding returns `None`.
+
+---
+
+### 5.3 High-Resolution Patch Extraction
+
+Module:
+
+```
+glioma_sparse.interpret.highres_extraction
+```
+
+Given a thumbnail, its Stage-A risk map, and `k`, this function selects the top-`k` highest-risk tiles (after filtering out tiles whose thumbnail content is mostly padding), maps each one back to WSI level-0 coordinates using the sidecar, reads the region with OpenSlide, and writes a `(output_size × output_size)` JPG (default 2048 × 2048) per patch.
+
+```python
+from glioma_sparse.interpret import extract_topk_patches
+
+results = extract_topk_patches(
+    thumbnail_path="data/included/slide.jpg",
+    risk_map=risk_map,
+    k=5,
+    output_size=2048,
+    label=class_names[target_class],
+)
+```
+
+Output files are named `<slide_id>_rankNN_r<r>c<c>_<label>.jpg` and form the input cohort for Stage B training.
+
+---
+
+## 6. CLUSTER USAGE (SLURM)
 
 Training can be run on GPU clusters (e.g. oaks-lab).
 
 ---
 
-### 5.1 SLURM Script
+### 6.1 SLURM Script
 
 Example:
 
@@ -414,27 +544,27 @@ Uses:
 - 1 GPU
 - 8 CPUs
 - 64 GB RAM
-- containerized environment
+- conda environment (no container required)
 
 Key paths:
 
 ```
-/data/pathology/projects/tareq/glioma-sparse
+/data/pathology/projects/tareq/Glioma-SPARSE
 ```
 
 ---
 
-### 5.2 Submit Job
+### 6.2 Submit Job
 
 From project directory:
 
 ```
-sbatch train_glioma_sparse.slurm
+sbatch train_glioma_sparse.slurm resnet18
 ```
 
 ---
 
-### 5.3 Monitor Job
+### 6.3 Monitor Job
 
 ```
 squeue -u $USER
@@ -448,12 +578,12 @@ Logs:
 
 ---
 
-## 6. OUTPUTS
+## 7. OUTPUTS
 
 ```
 training_output/<experiment_name>/
 
-config.txt
+config.json
 log.csv
 data_split.csv
 
@@ -490,9 +620,31 @@ included
 
 ---
 
+### Mapping sidecars (preprocessing)
+
+One JSON per thumbnail, alongside the JPG:
+
+```
+<slide_id>.json   # see Section 3.2 for fields
+```
+
+---
+
+### High-resolution patches (interpretation / Stage B input)
+
+```
+data/included/highres/
+  <slide_id>_rank01_r<r>c<c>_<label>.jpg
+  <slide_id>_rank02_r<r>c<c>_<label>.jpg
+  ...
+```
+
+---
+
 ## NOTES
 
 - Thumbnails saved as JPG (quality=90)
+- Each thumbnail has a JSON sidecar with the WSI mapping
 - Explicit class ordering enforced across:
   - dataset
   - training
@@ -509,6 +661,6 @@ included
 - YAML config system
 - Mixed precision (AMP)
 - Inference timing per slide
-- Stage B (patch-level model)
+- Stage B training script
 - End-to-end pipeline
 - External validation datasets

@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import numpy as np
 import openslide
 from PIL import Image
@@ -135,6 +136,16 @@ def pad_with_background_color(img, bg_color_hint=None):
 
 
 # ============================================================
+# MAPPING SIDECAR
+# ============================================================
+
+def write_mapping_sidecar(output_jpg_path, payload):
+    sidecar_path = Path(output_jpg_path).with_suffix(".json")
+    with open(sidecar_path, "w") as f:
+        json.dump(payload, f, indent=2)
+
+
+# ============================================================
 # MAIN FUNCTION
 # ============================================================
 
@@ -156,29 +167,40 @@ def create_wsi_thumbnail(
     base_mpp = get_base_mpp(props)
     bg_hint = get_background_color_from_props(props)
 
+    wsi_level0_dim = list(slide.level_dimensions[0])
+
     # --------------------------------------------------------
     # READ IMAGE
     # --------------------------------------------------------
 
     if base_mpp is None:
+        # No MPP available; read a coarse level as-is. Mapping back to the WSI
+        # is not possible without an MPP, so the sidecar will record this.
         level = min(2, slide.level_count - 1)
         img = slide.read_region((0, 0), level, slide.level_dimensions[level])
+        recorded_target_mpp = None
     else:
         target_ds = target_mpp / base_mpp
         level = pick_level(slide, target_ds)
 
         ds = slide.level_downsamples[level]
-        scale = target_ds / ds
+        scale = target_ds / ds   # >= 1: extra downsample needed beyond chosen level
 
         dims = slide.level_dimensions[level]
         img = slide.read_region((0, 0), level, dims)
 
         if abs(scale - 1.0) > 0.01:
-            new_w = int(dims[0] * scale)
-            new_h = int(dims[1] * scale)
+            new_w = int(dims[0] / scale)
+            new_h = int(dims[1] / scale)
             img = img.resize((new_w, new_h), Image.BICUBIC)
 
+        recorded_target_mpp = float(target_mpp)
+
     img = img.convert("RGB")
+
+    tissue_w, tissue_h = img.size
+    canvas_size = max(tissue_w, tissue_h)
+    tissue_offset = ((canvas_size - tissue_w) // 2, (canvas_size - tissue_h) // 2)
 
     # --------------------------------------------------------
     # TISSUE FRACTION (BEFORE PADDING)
@@ -202,7 +224,7 @@ def create_wsi_thumbnail(
     effective_fraction = estimate_fraction(mask_after)
 
     # --------------------------------------------------------
-    # SAVE OUTPUT
+    # SAVE OUTPUT (+ MAPPING SIDECAR)
     # --------------------------------------------------------
 
     if output_path is not None:
@@ -214,6 +236,21 @@ def create_wsi_thumbnail(
         if save_mask:
             mask_img = Image.fromarray((mask_after * 255).astype(np.uint8))
             mask_img.save(output_path.with_name("{}_mask.png".format(output_path.stem)))
+
+        # Mapping sidecar: enough information to convert a thumbnail-pixel
+        # bounding box back to WSI level-0 pixel coordinates without re-opening
+        # the slide. See glioma_sparse.interpret.wsi_mapping.
+        sidecar = {
+            "wsi_path": str(slide_path.resolve()),
+            "wsi_level0_dim": wsi_level0_dim,
+            "base_mpp": float(base_mpp) if base_mpp is not None else None,
+            "target_mpp": recorded_target_mpp,
+            "tissue_image_dim": [int(tissue_w), int(tissue_h)],
+            "canvas_size": int(canvas_size),
+            "tissue_offset_in_canvas": [int(tissue_offset[0]), int(tissue_offset[1])],
+            "thumbnail_size": int(output_size),
+        }
+        write_mapping_sidecar(output_path, sidecar)
 
     slide.close()
 
