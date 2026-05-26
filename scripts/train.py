@@ -7,6 +7,8 @@ import json
 import time
 from datetime import datetime
 from collections import Counter
+import argparse
+import os
 
 import numpy as np
 from sklearn.model_selection import train_test_split
@@ -26,19 +28,25 @@ from glioma_sparse.training.seeding import set_seed, seed_worker
 
 
 # ============================================================
-# EXPERIMENT CONFIG
+# ARGPARSE (CLI + SLURM SUPPORT)
 # ============================================================
 
-EXPERIMENT_NAME = None   # set to a string to override; None auto-generates from settings
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", type=str, default=None,
+                        help="Model name (resnet18, resnet34, resnet50)")
+    return parser.parse_args()
+
+
+# ============================================================
+# CONFIG
+# ============================================================
+
+EXPERIMENT_NAME = None
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = REPO_ROOT / "data" / "included"
 BASE_OUT_DIR = REPO_ROOT / "training_output"
-
-
-# ============================================================
-# SETTINGS
-# ============================================================
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -46,10 +54,10 @@ USE_OVERSAMPLING = False
 USE_CLASS_WEIGHTED_LOSS = True
 USE_EXISTING_SPLIT = False
 
-BEST_CHECKPOINT_METRIC = "auc"   # "auc", "f1", or "acc"
+BEST_CHECKPOINT_METRIC = "auc"
 
-BATCH_SIZE = 2
-NUM_EPOCHS = 2
+BATCH_SIZE = 8
+NUM_EPOCHS = 150
 NUM_WORKERS = 4
 LEARNING_RATE = 1e-4
 SEED = 42
@@ -61,8 +69,8 @@ CLASS_ORDER = ["control", "low_grade", "high_grade"]
 # UTILITIES
 # ============================================================
 
-def build_experiment_name():
-    parts = ["resnet18"]
+def build_experiment_name(model_name):
+    parts = [model_name]
     if USE_OVERSAMPLING:
         parts.append("os")
     if USE_CLASS_WEIGHTED_LOSS:
@@ -102,8 +110,7 @@ def compute_class_weights(train_labels, num_classes, device):
     for i in range(num_classes):
         if i not in counts:
             raise ValueError(
-                f"Class index {i} ({CLASS_ORDER[i]}) has no training samples. "
-                f"Cannot compute class-weighted loss."
+                f"Class index {i} ({CLASS_ORDER[i]}) has no training samples."
             )
         weights.append(total / (num_classes * counts[i]))
 
@@ -140,9 +147,17 @@ def evaluate_model(model, loader, device):
 
 def main():
 
-    # --------------------------------------------------------
-    # SANITY CHECKS
-    # --------------------------------------------------------
+    args = parse_args()
+
+    # Priority: CLI > SLURM env > default
+    model_name = (
+        args.model
+        or os.environ.get("MODEL")
+        or "resnet18"
+    )
+
+    print(f"\nUsing model: {model_name}")
+
     assert not (USE_OVERSAMPLING and USE_CLASS_WEIGHTED_LOSS), \
         "Use either oversampling or class-weighted loss, not both"
 
@@ -151,7 +166,7 @@ def main():
     # --------------------------------------------------------
     set_seed(SEED)
 
-    experiment_name = EXPERIMENT_NAME or build_experiment_name()
+    experiment_name = EXPERIMENT_NAME or build_experiment_name(model_name)
     out_dir = BASE_OUT_DIR / experiment_name
     split_csv = out_dir / "data_split.csv"
 
@@ -162,7 +177,7 @@ def main():
     print("Device:", DEVICE)
 
     # --------------------------------------------------------
-    # BASE DATASET
+    # DATASET
     # --------------------------------------------------------
     base_dataset = SlideDataset(
         root_dir=DATA_DIR,
@@ -178,7 +193,7 @@ def main():
     assert len(paths) > 0, f"No data found in {DATA_DIR}"
 
     # --------------------------------------------------------
-    # SPLIT (STRATIFIED)
+    # SPLIT
     # --------------------------------------------------------
     if USE_EXISTING_SPLIT and split_csv.exists():
 
@@ -197,26 +212,17 @@ def main():
                 test_paths.append(p); test_labels.append(l)
 
     else:
+        train_paths, temp_paths, train_labels, temp_labels = train_test_split(
+            paths, labels, test_size=0.2, stratify=labels, random_state=SEED
+        )
 
-        try:
-            train_paths, temp_paths, train_labels, temp_labels = train_test_split(
-                paths, labels, test_size=0.2, stratify=labels, random_state=SEED
-            )
-
-            val_paths, test_paths, val_labels, test_labels = train_test_split(
-                temp_paths, temp_labels, test_size=0.5, stratify=temp_labels, random_state=SEED
-            )
-
-        except ValueError as e:
-            class_counts = Counter(labels)
-            raise RuntimeError(
-                f"Stratified split failed. Class counts: {dict(class_counts)}. "
-                f"You likely have too few samples per class for an 80/10/10 split. "
-                f"Original error: {e}"
-            ) from e
+        val_paths, test_paths, val_labels, test_labels = train_test_split(
+            temp_paths, temp_labels, test_size=0.5, stratify=temp_labels, random_state=SEED
+        )
 
         train_set = set(train_paths)
         val_set = set(val_paths)
+
         splits = []
         for p in paths:
             if p in train_set:
@@ -267,7 +273,6 @@ def main():
     # LOADERS
     # --------------------------------------------------------
     pin_memory = torch.cuda.is_available()
-    persistent = NUM_WORKERS > 0
 
     train_loader = DataLoader(
         train_dataset,
@@ -276,7 +281,7 @@ def main():
         num_workers=NUM_WORKERS,
         worker_init_fn=seed_worker,
         pin_memory=pin_memory,
-        persistent_workers=persistent,
+        persistent_workers=NUM_WORKERS > 0,
     )
 
     val_loader = DataLoader(
@@ -286,7 +291,7 @@ def main():
         num_workers=NUM_WORKERS,
         worker_init_fn=seed_worker,
         pin_memory=pin_memory,
-        persistent_workers=persistent,
+        persistent_workers=NUM_WORKERS > 0,
     )
 
     test_loader = DataLoader(
@@ -296,13 +301,13 @@ def main():
         num_workers=NUM_WORKERS,
         worker_init_fn=seed_worker,
         pin_memory=pin_memory,
-        persistent_workers=persistent,
+        persistent_workers=NUM_WORKERS > 0,
     )
 
     # --------------------------------------------------------
-    # MODEL + LOSS + OPTIMIZER
+    # MODEL
     # --------------------------------------------------------
-    model = build_model("resnet18", num_classes=len(class_names))
+    model = build_model(model_name, num_classes=len(class_names))
     model.to(DEVICE)
 
     if USE_CLASS_WEIGHTED_LOSS:
@@ -320,25 +325,12 @@ def main():
     # --------------------------------------------------------
     save_config(out_dir, {
         "experiment_name": experiment_name,
-        "model": "resnet18",
-        "num_classes": len(CLASS_ORDER),
-        "class_order": CLASS_ORDER,
+        "model": model_name,
         "epochs": NUM_EPOCHS,
         "batch_size": BATCH_SIZE,
-        "num_workers": NUM_WORKERS,
         "learning_rate": LEARNING_RATE,
-        "optimizer": "Adam",
         "seed": SEED,
-        "device": DEVICE,
-        "use_oversampling": USE_OVERSAMPLING,
-        "use_class_weighted_loss": USE_CLASS_WEIGHTED_LOSS,
         "class_weights": class_weights_list,
-        "best_checkpoint_metric": BEST_CHECKPOINT_METRIC,
-        "data_dir": str(DATA_DIR),
-        "dataset_size": len(paths),
-        "train_size": len(train_paths),
-        "val_size": len(val_paths),
-        "test_size": len(test_paths),
     })
 
     # --------------------------------------------------------
@@ -356,90 +348,34 @@ def main():
 
     start = time.time()
     history, _, _ = trainer.train(NUM_EPOCHS)
-    total_time = time.time() - start
+    print(f"\nTraining time: {time.time() - start:.2f} sec")
 
-    print("\nTotal training time: {:.2f} sec".format(total_time))
-
-    # --------------------------------------------------------
-    # TRAINING CURVES
-    # --------------------------------------------------------
     plot_training_curves(history, out_dir)
 
     # --------------------------------------------------------
-    # RELOAD BEST CHECKPOINT FOR FINAL EVALUATION
+    # LOAD BEST MODEL
     # --------------------------------------------------------
     best_model_path = out_dir / f"best_{BEST_CHECKPOINT_METRIC}.pth"
-
-    if not best_model_path.exists():
-        raise FileNotFoundError(
-            f"Best checkpoint not found at {best_model_path}. "
-            f"Training may have ended before any improvement was recorded."
-        )
-
-    model.load_state_dict(torch.load(best_model_path, map_location=DEVICE, weights_only=True))
+    model.load_state_dict(torch.load(best_model_path, map_location=DEVICE))
     model.to(DEVICE)
 
-    print(f"\nLoaded best checkpoint ({BEST_CHECKPOINT_METRIC}) from {best_model_path}")
+    # --------------------------------------------------------
+    # VALIDATION EVAL
+    # --------------------------------------------------------
+    print("\n=== VALIDATION ===")
+    y, preds, probs = evaluate_model(model, val_loader, DEVICE)
+
+    plot_confusion_matrix(y, preds, CLASS_ORDER, out_dir / "confusion_matrix_val.png")
+    plot_roc_curve(y, probs, CLASS_ORDER, out_dir / "roc_curve_val.png")
 
     # --------------------------------------------------------
-    # VALIDATION EVALUATION (on best checkpoint)
+    # TEST EVAL
     # --------------------------------------------------------
-    print("\n=== VALIDATION EVALUATION ===")
+    print("\n=== TEST ===")
+    y, preds, probs = evaluate_model(model, test_loader, DEVICE)
 
-    val_labels_arr, val_preds, val_probs = evaluate_model(model, val_loader, DEVICE)
-
-    plot_confusion_matrix(
-        val_labels_arr,
-        val_preds,
-        CLASS_ORDER,
-        out_dir / "confusion_matrix_val_raw.png",
-        normalize=False,
-    )
-
-    plot_confusion_matrix(
-        val_labels_arr,
-        val_preds,
-        CLASS_ORDER,
-        out_dir / "confusion_matrix_val_norm.png",
-        normalize=True,
-    )
-
-    plot_roc_curve(
-        val_labels_arr,
-        val_probs,
-        CLASS_ORDER,
-        out_dir / "roc_curve_val.png",
-    )
-
-    # --------------------------------------------------------
-    # TEST EVALUATION (on best checkpoint)
-    # --------------------------------------------------------
-    print("\n=== TEST EVALUATION ===")
-
-    test_labels_arr, test_preds, test_probs = evaluate_model(model, test_loader, DEVICE)
-
-    plot_confusion_matrix(
-        test_labels_arr,
-        test_preds,
-        CLASS_ORDER,
-        out_dir / "confusion_matrix_test_raw.png",
-        normalize=False,
-    )
-
-    plot_confusion_matrix(
-        test_labels_arr,
-        test_preds,
-        CLASS_ORDER,
-        out_dir / "confusion_matrix_test_norm.png",
-        normalize=True,
-    )
-
-    plot_roc_curve(
-        test_labels_arr,
-        test_probs,
-        CLASS_ORDER,
-        out_dir / "roc_curve_test.png",
-    )
+    plot_confusion_matrix(y, preds, CLASS_ORDER, out_dir / "confusion_matrix_test.png")
+    plot_roc_curve(y, probs, CLASS_ORDER, out_dir / "roc_curve_test.png")
 
     print("\nSaved evaluation plots.")
 
