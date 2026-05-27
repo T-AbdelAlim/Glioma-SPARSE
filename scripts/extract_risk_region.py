@@ -34,7 +34,7 @@ def load_model(checkpoint_path, model_name, device):
 
 
 def is_wsi(path):
-    return path.suffix.lower() in [".ndpi", ".svs", ".tiff", ".tif"]
+    return path.suffix.lower() in [".ndpi", ".svs", ".tiff", ".tif", ".mrxs"]
 
 
 def generate_thumbnail_if_needed(input_path, tmp_dir):
@@ -59,74 +59,177 @@ def save_heatmap(risk_map, save_path):
     plt.close()
 
 
-def save_overlay(image, risk_map, save_path):
-    img = np.array(image.resize((2048, 2048)))
+def save_overlay(image, risk_map, save_path, label_x=1.5, predicted_class_name=None):
 
-    heatmap = cv2.resize(risk_map, (2048, 2048))
-    heatmap = (heatmap - heatmap.min()) / (heatmap.max() + 1e-8)
-    heatmap = (heatmap * 255).astype(np.uint8)
+    img_rgb = np.array(image.resize((2048, 2048)))
 
-    heatmap_color = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+    heatmap = cv2.resize(
+        risk_map,
+        (2048, 2048),
+        interpolation=cv2.INTER_CUBIC
+    )
 
-    overlay = cv2.addWeighted(img, 0.6, heatmap_color, 0.4, 0)
+    fig, ax = plt.subplots(figsize=(10, 10))
 
-    cv2.imwrite(str(save_path), overlay)
+    ax.imshow(img_rgb)
 
-def save_grid_risk_overlay(image, risk_map, save_path, alpha=0.6):
+    hm = ax.imshow(
+        heatmap,
+        cmap="jet",
+        alpha=0.4,
+        vmin=float(risk_map.min()),
+        vmax=float(risk_map.max()),
+    )
+
+    ax.axis("off")
+
+    # --------------------------------------------------------
+    # COLOURBAR
+    # --------------------------------------------------------
+    cbar = fig.colorbar(hm, ax=ax, fraction=0.04, pad=0.02)
+    cbar.set_ticks([])
+
+    cbar.ax.text(
+        0.5, 1.02, "Strong",
+        ha="center",
+        va="bottom",
+        transform=cbar.ax.transAxes,
+    )
+
+    cbar.ax.text(
+        0.5, -0.02, "Weak",
+        ha="center",
+        va="top",
+        transform=cbar.ax.transAxes,
+    )
+
+    label = (
+        f"Evidence for '{predicted_class_name}'"
+        if predicted_class_name is not None
+        else "Class-associated signal"
+    )
+
+    cbar.ax.text(
+        1.5, 0.5, label,
+        rotation=90,
+        ha="center",
+        va="center",
+        transform=cbar.ax.transAxes,
+    )
+
+    plt.savefig(save_path, bbox_inches="tight", dpi=300)
+    plt.close()
+
+
+def save_grid_risk_overlay(
+    image,
+    risk_map,
+    save_path,
+    alpha=1.0,
+    predicted_class_name=None,
+):
 
     img = np.array(image)
-    h, w, _ = img.shape
 
+    h, w = img.shape[:2]
     grid_h, grid_w = risk_map.shape
 
     cell_h = h / grid_h
     cell_w = w / grid_w
 
-    # Normalize risk
-    risk_norm = (risk_map - risk_map.min()) / (risk_map.max() + 1e-8)
+    # normalise to [0, 1]
+    risk_norm = (
+        risk_map - risk_map.min()
+    ) / (
+        risk_map.max() - risk_map.min() + 1e-8
+    )
 
     cmap = plt.get_cmap("jet")
 
     fig, ax = plt.subplots(figsize=(10, 10))
+
     ax.imshow(img)
+    ax.axis("off")
 
     # --------------------------------------------------------
-    # 🔥 FLATTEN + SORT (KEY CHANGE)
+    # DRAW LOW RISK FIRST, HIGH RISK LAST
     # --------------------------------------------------------
-    cells = []
-    for i in range(grid_h):
-        for j in range(grid_w):
-            cells.append((risk_norm[i, j], i, j))
+    cells = sorted(
+        [
+            (risk_norm[i, j], i, j)
+            for i in range(grid_h)
+            for j in range(grid_w)
+        ],
+        key=lambda x: x[0]
+    )
 
-    # sort ascending → low first, high last
-    cells.sort(key=lambda x: x[0])
-
-    # --------------------------------------------------------
-    # DRAW IN ORDER
-    # --------------------------------------------------------
     for r, i, j in cells:
 
-        color = cmap(r)
-
-        y = int(i * cell_h)
-        x = int(j * cell_w)
-
         rect = plt.Rectangle(
-            (x, y),
+            (
+                int(j * cell_w),
+                int(i * cell_h),
+            ),
             int(cell_w),
             int(cell_h),
-            linewidth=1 + 3 * r,   # your thickness scaling
-            edgecolor=color,
-            facecolor='none',
-            alpha=alpha
+            linewidth=1 + 3 * r,
+            edgecolor=cmap(r),
+            facecolor="none",
+            alpha=alpha,
         )
 
         ax.add_patch(rect)
 
-    ax.set_title("Grid Risk Map")
-    ax.axis("off")
+    # --------------------------------------------------------
+    # COLOURBAR
+    # --------------------------------------------------------
+    mappable = plt.cm.ScalarMappable(
+        cmap=cmap,
+        norm=plt.Normalize(vmin=0, vmax=1),
+    )
 
-    plt.savefig(save_path, bbox_inches="tight", dpi=200)
+    mappable.set_array([])
+
+    cbar = fig.colorbar(
+        mappable,
+        ax=ax,
+        fraction=0.04,
+        pad=0.02,
+    )
+
+    cbar.set_ticks([])
+
+    cbar.ax.text(
+        0.5, 1.02, "Strong",
+        ha="center",
+        va="bottom",
+        transform=cbar.ax.transAxes,
+    )
+
+    cbar.ax.text(
+        0.5, -0.02, "Weak",
+        ha="center",
+        va="top",
+        transform=cbar.ax.transAxes,
+    )
+
+    label = (
+        "Evidence for '{}'".format(predicted_class_name)
+        if predicted_class_name is not None
+        else "Class-associated signal"
+    )
+
+    cbar.ax.text(
+        1.5,
+        0.5,
+        label,
+        rotation=90,
+        ha="center",
+        va="center",
+        transform=cbar.ax.transAxes,
+    )
+
+    plt.savefig(save_path, bbox_inches="tight", dpi=300)
     plt.close()
 
 # ============================================================
@@ -199,7 +302,7 @@ def run_single_inference(
     # --------------------------------------------------------
     # RISK MAP
     # --------------------------------------------------------
-    risk_map, uncertainty_map = compute_risk_map(
+    risk_map, _target_class = compute_risk_map(
         target_img=target_img,
         control_img=control_img,
         model=model,
@@ -256,7 +359,7 @@ def run_single_inference(
 if __name__ == "__main__":
 
     run_single_inference(
-        input_path=r"D:\Thinkpad_Backup\Data\WSI_datasets\EMC_data\Set_2\LMS-6-2330903 - 2026-04-17 20.15.15.ndpi",
+        input_path=r"C:\Users\Tareq\pythonProject\Glioma-SPARSE\data\testdata\svs\TCGA-06-0206-01Z-00-DX1.5ede33b2-4778-4e33-bb83-17f81bb35aca.svs",
         checkpoint_path=r"C:\Users\Tareq\pythonProject\Glioma-SPARSE\training_output\20260526_0947_resnet34_cw\best_acc.pth",
         control_image_path=r"C:\Users\Tareq\pythonProject\Glioma-SPARSE\data\ebrains_thumbnails\control\included\86242943-7775-11eb-827d-001a7dda7111.jpg",
         model_name="resnet34",
