@@ -16,8 +16,8 @@ The goal is to minimize compute while preserving diagnostic signal.
 1. [Installation](#1-installation)
 2. [Repository Structure](#2-repository-structure)
 3. [Preprocessing](#3-preprocessing)
-4. [Stage A Pipeline (Current)](#4-stage-a-pipeline-current)
-5. [Patch Injection and High-Resolution Extraction](#5-patch-injection-and-high-resolution-extraction)
+4. [Stage A Pipeline (Training)](#4-stage-a-pipeline-training)
+5. [Patch Injection and Stage B Dataset Generation](#5-patch-injection-and-stage-b-dataset-generation)
 6. [Cluster Usage (SLURM)](#6-cluster-usage-slurm)
 7. [Outputs](#7-outputs)
 
@@ -86,7 +86,11 @@ configs/        → configuration files (future)
 data/           → processed thumbnails per class
 docs/           → documentation
 notebooks/      → experiments
-scripts/        → runnable scripts (entry points)
+scripts/        → runnable entry points
+  train.py                   → Stage A training
+  process_wsi_folder.py      → batch preprocessing runner
+  extract_risk_region.py     → Stage A interpretability + Stage B dataset build
+  inference_stageA.py        → Stage A inference on new slides
 
 src/
   glioma_sparse/
@@ -106,7 +110,6 @@ src/
 
     training/
       trainer.py
-      seeding.py        ← ensures reproducibility
 
     evaluation/
       metrics.py
@@ -116,6 +119,9 @@ src/
       wsi_mapping.py            → thumbnail ↔ WSI level-0 coordinate mapping
       patch_injection.py        → risk map by injecting target patches into a control
       highres_extraction.py     → top-k high-resolution patch extraction from the WSI
+
+    utils/
+      seeding.py                ← ensures reproducibility
 
 tests/
 ```
@@ -185,19 +191,19 @@ process_wsi_folder()
 
 What it does:
 - Recursively finds WSIs (.svs, .ndpi, .mrxs, .tif, .tiff)
-- Generates thumbnails (+ sidecars)
+- Generates thumbnails (+ sidecars) via a staging directory so JPG and JSON always travel as a pair
 - Computes:
   - tissue_fraction
   - effective_tissue_fraction
 - Splits into:
   - included/
   - low_tissue/
-- Logs everything to metadata.csv
+- Logs everything to metadata.csv (including sidecar paths)
 
 Run batch processing:
 
 ```
-python scripts/demo_wsi_to_thumbnail.py
+python scripts/process_wsi_folder.py
 ```
 
 ---
@@ -221,7 +227,7 @@ python scripts/demo_wsi_to_thumbnail.py
 
 ---
 
-## 4. STAGE A PIPELINE (CURRENT)
+## 4. STAGE A PIPELINE (TRAINING)
 
 Run:
 
@@ -322,7 +328,7 @@ Ensures the model is invariant to tile position, which is a prerequisite for the
 
 Two strategies:
 
-#### Option A — Oversampling
+#### Option A. Oversampling
 
 ```
 USE_OVERSAMPLING = True
@@ -331,7 +337,7 @@ USE_OVERSAMPLING = True
 - Balances dataset via duplication
 - Works well with patch shuffle
 
-#### Option B — Class-weighted loss (recommended)
+#### Option B. Class-weighted loss (recommended)
 
 ```
 USE_CLASS_WEIGHTED_LOSS = True
@@ -430,9 +436,9 @@ Supports reporting of:
 
 ---
 
-## 5. PATCH INJECTION AND HIGH-RESOLUTION EXTRACTION
+## 5. PATCH INJECTION AND STAGE B DATASET GENERATION
 
-The `interpret/` module turns Stage A predictions into spatially-localised explanations and, in the same step, produces the high-resolution patches that feed Stage B.
+The `interpret/` module turns Stage A predictions into spatially-localised explanations and, in the same step, produces the high-resolution patches that feed Stage B. The script `scripts/extract_risk_region.py` is the user-facing entry point that wraps the module for single-slide inspection, per-class batch processing, and full Stage B dataset construction.
 
 ---
 
@@ -454,7 +460,7 @@ Positive values mean the injected tile increased the model's confidence in class
 
 Why this works for our pipeline. Training uses random patch permutation (Section 4.4), which makes the model invariant to tile position, so the risk score reflects only the tile's content rather than its location on the slide.
 
-Usage:
+Direct module usage (rarely needed; prefer the script in 5.4):
 
 ```python
 from glioma_sparse.interpret import compute_risk_map
@@ -510,6 +516,8 @@ glioma_sparse.interpret.highres_extraction
 
 Given a thumbnail, its Stage-A risk map, and `k`, this function selects the top-`k` highest-risk tiles (after filtering out tiles whose thumbnail content is mostly padding), maps each one back to WSI level-0 coordinates using the sidecar, reads the region with OpenSlide, and writes a `(output_size × output_size)` JPG (default 2048 × 2048) per patch.
 
+Direct module usage:
+
 ```python
 from glioma_sparse.interpret import extract_topk_patches
 
@@ -522,7 +530,93 @@ results = extract_topk_patches(
 )
 ```
 
-Output files are named `<slide_id>_rankNN_r<r>c<c>_<label>.jpg` and form the input cohort for Stage B training.
+Output files are named `<slide_id>_rankNN_r<r>c<c>_<label>.jpg`.
+
+---
+
+### 5.4 Script: extract_risk_region.py
+
+Script:
+
+```
+scripts/extract_risk_region.py
+```
+
+The script loads the Stage A model and the canonical control image once, then runs the per-slide pipeline (predict, compute risk map, save overlays, extract top-k patches) in three operational modes selected by the `MODE` variable at the top of the file.
+
+#### Mode: single
+
+Process one thumbnail or one raw WSI. If the input is a WSI (`.ndpi`, `.svs`, `.mrxs`, `.tif`, `.tiff`), a thumbnail and matching sidecar are generated on the fly in a `tmp/` subdirectory.
+
+Outputs (per slide):
+
+```
+risk_output_<stem>/
+  overlay.jpg              ← smooth heatmap on the thumbnail
+  grid_risk_map.jpg        ← per-tile coloured grid + colourbar
+  patches/                 ← top-k high-resolution patches
+  tmp/                     ← intermediate thumbnail + sidecar
+```
+
+Use this mode for figure generation, qualitative inspection, and demos.
+
+#### Mode: batch
+
+Process every thumbnail or WSI inside one folder with one label. Used to build the Stage B input cohort for a single molecular class.
+
+Required setting: `label_override`, a string carried into the filename of every extracted patch (e.g. `"IDH_mut_1p19qCD"`).
+
+Outputs:
+
+```
+<output_root>/
+  patches/                 ← flat directory, all patches across the batch
+  overlays/                ← optional, only if save_overlays=True
+  batch_summary.csv        ← per-slide prediction + probabilities + n_patches
+  batch_failures.csv       ← only if any slide failed
+  tmp/                     ← intermediate thumbnails for WSI inputs
+```
+
+`batch_summary.csv` and `batch_failures.csv` are append-aware. Running the script again with the same `output_root` (for example to add a new class) concatenates results rather than overwriting them.
+
+#### Mode: batch_all_classes
+
+Iterate over the molecular-class mapping in one run. This builds the complete Stage B training dataset.
+
+Mapping (WHO 2021):
+
+```
+oligo_IDHmt_1p19qdel_G2   →  IDH_mut_1p19qCD
+oligo_IDHmt_1p19qdel_G3   →  IDH_mut_1p19qCD
+astro_IDHmt_G2            →  IDH_mut
+astro_IDHmt_G3            →  IDH_mut
+astro_IDHmt_G4            →  IDH_mut
+GBM_IDHwt                 →  IDH_wt
+```
+
+Control is excluded (no molecular subtype to predict).
+
+Output structure is identical to `batch`, with patches from all classes accumulating in `output_root/patches/`. Filenames encode the molecular class:
+
+```
+<output_root>/patches/
+  <slide_id>_rank01_r<r>c<c>_IDH_mut_1p19qCD.jpg
+  <slide_id>_rank02_r<r>c<c>_IDH_mut_1p19qCD.jpg
+  ...
+  <slide_id>_rank01_r<r>c<c>_IDH_mut.jpg
+  ...
+  <slide_id>_rank01_r<r>c<c>_IDH_wt.jpg
+  ...
+```
+
+This folder is the input directory for Stage B training (`DATA_DIR` in the upcoming `train_stage_b.py`).
+
+#### Design notes
+
+- The model, transform, and control image are loaded once per script invocation, not per slide.
+- The risk map is always computed for the **predicted** class from Stage A. The `label_override` only sets the molecular label written into patch filenames.
+- Overlays are off by default in batch mode (slow, not needed for training data); turn them on with `save_overlays=True` if you want a visual record.
+- The canonical control thumbnail is fixed per project. Change it only if you know why.
 
 ---
 
@@ -580,6 +674,8 @@ Logs:
 
 ## 7. OUTPUTS
 
+### Stage A training
+
 ```
 training_output/<experiment_name>/
 
@@ -608,35 +704,60 @@ roc_curve_test.png
 
 ---
 
-### metadata.csv (preprocessing)
+### Preprocessing
+
+```
+data/<class>/
+  included/
+    <slide_id>.jpg
+    <slide_id>.json        ← mapping sidecar
+  low_tissue/
+    <slide_id>.jpg
+    <slide_id>.json
+  metadata.csv
+```
+
+`metadata.csv` columns:
 
 ```
 slide_path
 thumbnail_path
+sidecar_path
 tissue_fraction
 effective_tissue_fraction
 included
+processing_time_sec
+success
+error
 ```
 
 ---
 
-### Mapping sidecars (preprocessing)
-
-One JSON per thumbnail, alongside the JPG:
+### Stage A interpretation, single mode
 
 ```
-<slide_id>.json   # see Section 3.2 for fields
+risk_output_<slide_stem>/
+  overlay.jpg
+  grid_risk_map.jpg
+  patches/
+    <slide_id>_rank01_r<r>c<c>_<predicted_class>.jpg
+    ...
 ```
 
 ---
 
-### High-resolution patches (interpretation / Stage B input)
+### Stage B input cohort (batch or batch_all_classes mode)
 
 ```
-data/included/highres/
-  <slide_id>_rank01_r<r>c<c>_<label>.jpg
-  <slide_id>_rank02_r<r>c<c>_<label>.jpg
-  ...
+stage_b_training_data/
+  patches/
+    <slide_id>_rank01_r<r>c<c>_IDH_mut_1p19qCD.jpg
+    <slide_id>_rank01_r<r>c<c>_IDH_mut.jpg
+    <slide_id>_rank01_r<r>c<c>_IDH_wt.jpg
+    ...
+  overlays/                  ← only if save_overlays=True
+  batch_summary.csv
+  batch_failures.csv         ← if any slide failed
 ```
 
 ---
@@ -658,9 +779,9 @@ data/included/highres/
 
 ## NEXT STEPS
 
+- Stage B training script (`scripts/train_stage_b.py`)
+- End-to-end inference pipeline (Stage A → patch extraction → Stage B → soft-vote)
 - YAML config system
 - Mixed precision (AMP)
 - Inference timing per slide
-- Stage B training script
-- End-to-end pipeline
 - External validation datasets
