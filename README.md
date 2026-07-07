@@ -1,172 +1,143 @@
-
 # GLIOMA-SPARSE
 <img align="right" src="docs/logo.png" width="220px" />
 GLIOMA-SPARSE is a lightweight, interpretable computational pathology framework for glioma classification from routine H&E whole-slide images.
 
 The method follows a coarse-to-fine strategy:
-- Stage A: low-resolution analysis to identify informative regions
-- Stage B: high-resolution analysis on selected regions
+- **Stage A** grades the slide from a low-resolution thumbnail (control / low_grade / high_grade) and, through patch injection, identifies the most informative regions.
+- **Stage B** predicts the molecular subtype (IDH_mt / IDH_mt_1p19q / IDH_wt) from high-resolution patches re-extracted at the Stage A regions.
 
-The goal is to minimize compute while preserving diagnostic signal.
+The design keeps compute low while preserving diagnostic signal, so the whole pipeline runs on a single modest GPU.
 
-
+---
 
 ## INDEX
 
 1. [Installation](#1-installation)
 2. [Repository Structure](#2-repository-structure)
 3. [Preprocessing](#3-preprocessing)
-4. [Stage A Pipeline (Training)](#4-stage-a-pipeline-training)
-5. [Patch Injection and Stage B Dataset Generation](#5-patch-injection-and-stage-b-dataset-generation)
-6. [Cluster Usage (SLURM)](#6-cluster-usage-slurm)
-7. [Outputs](#7-outputs)
+4. [Cross-Validation Splits](#4-cross-validation-splits)
+5. [Stage A Training](#5-stage-a-training)
+6. [Threshold Tuning (Stage A)](#6-threshold-tuning-stage-a)
+7. [Patch Injection and the Stage B Cohort](#7-patch-injection-and-the-stage-b-cohort)
+8. [Stage B Training](#8-stage-b-training)
+9. [Aggregating Results Across Folds](#9-aggregating-results-across-folds)
+10. [Ablations](#10-ablations)
+11. [Outputs](#11-outputs)
+12. [Notes and Next Steps](#12-notes-and-next-steps)
 
 ---
 
 ## 1. INSTALLATION
 
-### Recommended setup (fast & stable)
-
-Create environment:
+Create the environment:
 
 ```
 conda create -n glioma-sparse python=3.10
 conda activate glioma-sparse
-```
-
-Install dependencies:
-
-```
 pip install -r requirements.txt
-```
-
-Install repository:
-
-```
 pip install -e .
 ```
 
----
-
-### GPU support (required for training speed)
-
-Verify:
+### GPU support
 
 ```
-python -c "import torch; print(torch.cuda.is_available())"
+python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
 ```
 
-If False, reinstall PyTorch with CUDA:
+Expect a version tag like `2.x.x+cu121 True`. If it reports `+cpu` or `False`, reinstall PyTorch with a CUDA build matching your driver. The `cu121` and `cu124` wheels ship their own CUDA runtime, so any recent driver works:
 
 ```
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 ```
 
----
+The `CUDA Version` shown in `nvidia-smi` is the maximum runtime the driver supports, so a driver reporting a higher version than the wheel is fine.
 
-### OpenSlide (Windows requirement)
-
-Download binaries:
-https://openslide.org/download/
-
-Add to PATH:
+### Optional dependencies for efficiency logging
 
 ```
-C:\path\to\openslide\bin
+pip install nvidia-ml-py thop
 ```
+
+`nvidia-ml-py` (imported as `pynvml`) enables GPU energy measurement, and `thop` enables FLOP counting. Both degrade gracefully: without them, the relevant fields are logged as null and everything still runs.
+
+### OpenSlide (Windows)
+
+Download the binaries from https://openslide.org/download/ and add `C:\path\to\openslide\bin` to PATH.
 
 ---
 
 ## 2. REPOSITORY STRUCTURE
 
+Entry points are run as modules from the repo root, for example `python -m scripts.stage_a.train`.
+
 ```
 Glioma-SPARSE/
 
-configs/        → configuration files (future)
-data/           → processed thumbnails per class
-docs/           → documentation
-notebooks/      → experiments
-scripts/        → runnable entry points
-  train.py                   → Stage A training
-  process_wsi_folder.py      → batch preprocessing runner
-  extract_risk_region.py     → Stage A interpretability + Stage B dataset build
-  inference_stageA.py        → Stage A inference on new slides
+data/
+  included/                     grade-organised thumbnails (control/low_grade/high_grade)
+  ebrains_thumbnails/           thumbnails + JSON sidecars, per subtype/included
+  stage_b_cohort/               generated Stage B patches + manifests
+splits/                         the 5 frozen cross-validation split CSVs
 
-src/
-  glioma_sparse/
+scripts/
+  lib/
+    eval_metrics.py             shared metric definitions (Stage A + B + aggregation)
+    profiling.py                env capture, params/FLOPs, GPU energy meter
+  data/
+    generate_splits.py          write splits/split_01..05.csv
+    aggregate_splits.py         aggregate per-fold results -> summary + figure
+    process_wsi_folder.py       batch preprocessing runner
+  stage_a/
+    train.py                    Stage A training (one fold per run)
+    tune_threshold.py           post-hoc operating-point tuning on validation
+    inference_stageA.py         Stage A inference on new slides
+    injection_site_ablation.py  R stability across injection sites
+    fixed_site_injection.py     inject every tile at one fixed site
+  stage_b/
+    build_stageB_cohort.py      per-fold p95 patch extraction + manifests
+    stageB_dataset.py           resolve train/val/test per fold from the manifest
+    train_stageB.py             Stage B training (one fold per run)
+  demo/
+    injection_demo.py           explainer figure of the injection mechanism
 
-    preprocessing/
-      create_wsi_thumbnail.py   → single-WSI thumbnail + mapping sidecar
-      process_dataset.py        → batch preprocessing + CSV log
-
-    data_utils/
-      slide_dataset.py
-      patches.py
-      transforms.py
-      sampling.py
-
-    models/
-      factory.py
-
-    training/
-      trainer.py
-
-    evaluation/
-      metrics.py
-      plots.py
-
-    interpret/                  ← Stage A interpretability + Stage B input generation
-      wsi_mapping.py            → thumbnail ↔ WSI level-0 coordinate mapping
-      patch_injection.py        → risk map by injecting target patches into a control
-      highres_extraction.py     → top-k high-resolution patch extraction from the WSI
-
-    utils/
-      seeding.py                ← ensures reproducibility
+src/glioma_sparse/
+  preprocessing/
+    create_wsi_thumbnail.py     single-WSI thumbnail + mapping sidecar
+    process_dataset.py          batch preprocessing + CSV log
+  data_utils/
+    slide_dataset.py, patches.py, transforms.py, sampling.py
+  models/factory.py
+  training/
+    trainer.py                  training loop, checkpoints, early stopping
+    seeding.py                  set_seed, seed_worker, make_generator
+  evaluation/plots.py
+  interpret/
+    wsi_mapping.py              thumbnail <-> WSI level-0 coordinate mapping
+    patch_injection.py          risk map by injecting target tiles into a control
+    highres_extraction.py       p95 / top-k high-resolution patch extraction
 
 tests/
 ```
+
+The shared helpers in `scripts/lib/` are imported as `from scripts.lib.eval_metrics import ...`, so run entry points as modules (`python -m scripts.stage_a.train`) from the repo root.
 
 ---
 
 ## 3. PREPROCESSING
 
-Converts WSIs into thumbnails + tissue metrics + a mapping sidecar.
+Preprocessing converts each WSI into a 2048x2048 thumbnail resampled to a target resolution (4.0 µm/pixel), plus a JSON sidecar that records the exact transformation from thumbnail pixels back to WSI level-0 coordinates.
 
----
+### 3.1 Thumbnail generation
 
-### 3.1 Thumbnail Generation
+`create_wsi_thumbnail()` returns `img, tissue_fraction, effective_tissue_fraction` and, when an output path is given, writes the thumbnail JPG and its `<slide_id>.json` sidecar. Steps: read the WSI, pick the coarsest pyramid level at or below the target downsample, resize to the target MPP, measure tissue fraction, pad to a square, resize to the thumbnail size, and record the mapping.
 
-Function:
+### 3.2 Mapping sidecar (required for Stage B)
 
-```
-create_wsi_thumbnail()
-```
-
-Returns:
-
-```
-img, tissue_fraction, effective_tissue_fraction
-```
-
-Steps:
-1. Read WSI (OpenSlide)
-2. Downsample to target MPP (physical resolution in µm per pixel)
-3. Compute tissue mask
-4. Compute tissue_fraction (before padding)
-5. Pad to square
-6. Resize to thumbnail size
-7. Compute effective_tissue_fraction (after resizing)
-8. Write mapping sidecar (`<slide_id>.json`) when an output_path is provided
-
----
-
-### 3.2 Mapping Sidecar (IMPORTANT for Stage B)
-
-Each thumbnail JPG is accompanied by a `<slide_id>.json` sidecar containing every parameter needed to map a thumbnail-pixel bounding box back to WSI level-0 pixel coordinates without re-opening the slide:
+Each thumbnail carries a sidecar with everything needed to project a thumbnail bounding box to WSI level-0 without re-opening the slide:
 
 ```json
 {
-  "wsi_path": "/data/.../slide.svs",
+  "wsi_path": "/data/.../slide.ndpi",
   "wsi_level0_dim": [60000, 50000],
   "base_mpp": 0.5001,
   "target_mpp": 4.0,
@@ -177,611 +148,275 @@ Each thumbnail JPG is accompanied by a `<slide_id>.json` sidecar containing ever
 }
 ```
 
-These sidecars are required by `interpret/` for Stage B (re-extracting high-resolution patches from selected thumbnail regions). Old thumbnails generated before sidecar support need to be re-preprocessed.
+Stage B depends on these sidecars. A thumbnail generated before sidecar support has to be re-preprocessed.
+
+### 3.3 Batch processing
+
+`process_wsi_folder()` finds WSIs recursively, generates thumbnails and sidecars through a staging directory so the JPG and JSON always travel together, computes the tissue metrics, sorts slides into `included/` and `low_tissue/`, and logs to `metadata.csv`.
+
+```
+python -m scripts.data.process_wsi_folder
+```
+
+`tissue_fraction` is measured before padding (biological content), `effective_tissue_fraction` after padding (what the model sees), and `threshold_metric` selects which one the include/exclude decision uses.
 
 ---
 
-### 3.3 Dataset Processing
+## 4. CROSS-VALIDATION SPLITS
 
-Function:
-
-```
-process_wsi_folder()
-```
-
-What it does:
-- Recursively finds WSIs (.svs, .ndpi, .mrxs, .tif, .tiff)
-- Generates thumbnails (+ sidecars) via a staging directory so JPG and JSON always travel as a pair
-- Computes:
-  - tissue_fraction
-  - effective_tissue_fraction
-- Splits into:
-  - included/
-  - low_tissue/
-- Logs everything to metadata.csv (including sidecar paths)
-
-Run batch processing:
+The study uses five stratified 80/10/10 splits, frozen once and reused by Stage A, Stage B, and any benchmark, so every result is comparable across the same partitions.
 
 ```
-python scripts/process_wsi_folder.py
+python -m scripts.data.generate_splits
 ```
+
+This writes `splits/split_01.csv` through `splits/split_05.csv`, each with `path,split` columns and identical per-class proportions. The script prints per-split, per-class counts and confirms the five splits differ. Regenerate the splits whenever `DATA_DIR` changes.
 
 ---
 
-### 3.4 Key Concepts
+## 5. STAGE A TRAINING
 
-#### tissue_fraction
-- Computed before padding
-- Reflects biological content
-
-#### effective_tissue_fraction
-- Computed after padding/resizing
-- Reflects what the model actually sees
-
-#### threshold_metric
+Train one fold per run by pointing at that fold's split CSV:
 
 ```
-"tissue"    → biological filtering
-"effective" → model-input-aware filtering
+python -m scripts.stage_a.train --split-csv splits/split_01.csv
+python -m scripts.stage_a.train --split-csv splits/split_02.csv
+...
 ```
+
+The `--split-csv` flag loads the pre-generated split, so the run uses exactly that partition rather than an on-the-fly split. Each run writes to `training_output/<timestamp>_resnet18_cw_split_0X/`.
+
+### 5.1 Class order
+
+Fixed across dataset, training, and evaluation:
+
+```
+0 = control, 1 = low_grade, 2 = high_grade
+```
+
+### 5.2 Reproducibility
+
+Seeding is centralised in `glioma_sparse.training.seeding`: it seeds torch, numpy, random, and CUDA, sets `PYTHONHASHSEED`, and enables cuDNN determinism. The training DataLoader gets a seeded generator and per-worker seeds. With the seed fixed across all five folds, the only thing varying between folds is the data partition, which is what a split study is meant to isolate.
+
+### 5.3 Patch shuffle
+
+`Patch(8)` splits each thumbnail into an 8x8 grid and permutes the 64 tiles at every training access, applied to the training set only. This makes the model invariant to tile position, which is the property that lets Stage A's patch-injection risk score reflect tile content rather than location (Section 7).
+
+### 5.4 Class imbalance
+
+Two mutually exclusive strategies, enforced by an assertion:
+- `USE_CLASS_WEIGHTED_LOSS = True` (default): normalised inverse-frequency weights, `w_i = total / (num_classes * count_i)`.
+- `USE_OVERSAMPLING = True`: minority duplication, each duplicate seeing a fresh patch permutation.
+
+### 5.5 Epochs and early stopping
+
+`NUM_EPOCHS = 80` is a ceiling. Early stopping (in `Trainer`, on validation AUC, patience configurable) ends most runs earlier. Keep `NUM_EPOCHS` and patience identical across folds and models so the cross-fold time and energy comparison stays clean. The number of epochs actually run is logged in `efficiency.json`.
+
+### 5.6 What each run saves
+
+- `config.json`: hyperparameters, split provenance, environment, params, FLOPs.
+- `log.csv`: per-epoch train/val loss and metrics.
+- `data_split.csv`: the split used, for provenance.
+- `best_auc.pth`, `best_f1.pth`, `best_acc.pth`, `last.pth`.
+- `val_predictions.npz`, `test_predictions.npz`: raw `y_true` and `y_prob` (this is what aggregation and threshold tuning read).
+- `metrics_val.json`, `metrics_test.json`: accuracy, balanced accuracy, macro/weighted F1, macro and per-class AUC, per-class recall and precision, quadratic weighted kappa.
+- `confusion_matrix_*.png`, `roc_curve_*.png`, training curves.
+- `efficiency.json`: params, FLOPs per slide, training time and energy, inference latency, throughput, energy per slide, peak GPU memory, epochs run.
+
+Final val and test evaluation runs on the checkpoint selected by `BEST_CHECKPOINT_METRIC` (default `auc`), not the last epoch.
 
 ---
 
-## 4. STAGE A PIPELINE (TRAINING)
+## 6. THRESHOLD TUNING (STAGE A)
 
-Run:
+Stage A tends to rank low_grade well (high AUC) while the default argmax sends many low_grade slides to an adjacent grade (low recall). `tune_threshold.py` recovers low_grade recall after training, without retraining, by re-weighting the class scores before the argmax. The weights are fit on each fold's validation predictions and applied once to that fold's test predictions, so the test estimate stays honest.
 
 ```
-python scripts/train.py
+python -m scripts.stage_a.tune_threshold --objective macro_f1
+python -m scripts.stage_a.tune_threshold --objective macro_f1 --pooled
+python -m scripts.stage_a.tune_threshold --pooled --objective low_grade_recall --min-precision 0.6
 ```
 
-This is a complete, reproducible training pipeline.
+`--pooled` fits one shared operating point on all folds' validation predictions combined, which is steadier than per-fold fitting when validation sets are small, and is the version to report. AUC is unchanged by design (thresholding does not alter the ranking). Outputs land in `training_output/aggregate_tuned/`, with default-versus-tuned summaries and the fitted weights per fold. Report the tuned result as a pre-specified sensitivity analysis alongside the argmax result.
 
 ---
 
-### 4.1 Dataset
+## 7. PATCH INJECTION AND THE STAGE B COHORT
 
-Class:
+### 7.1 Risk map by patch injection
 
-```
-SlideDataset
-```
-
-- One thumbnail = one sample
-- Explicit class order enforced:
+`glioma_sparse.interpret.patch_injection.compute_risk_map` measures, for a target slide predicted as class `p`, how much injecting each target tile into a fixed shuffled control shifts the model's output for `p`:
 
 ```
-["control", "low_grade", "high_grade"]
+risk_map[r, c] = score_injected(class p) - score_baseline(class p)
 ```
 
-- Ensures mapping:
+The score is the **class logit** by default (`score="logit"`). On a confident model the softmax saturates, so a single injected tile barely moves the probability and the map collapses to zero; the logit keeps the contrast. The control is shuffled once with a fixed seed (42), so its own tile arrangement carries no positional information. Because Stage A is trained with patch permutation, the model is position-invariant, so R reflects tile content rather than location.
+
+### 7.2 Coordinate mapping
+
+`glioma_sparse.interpret.wsi_mapping` inverts the three preprocessing transforms (resample to target MPP, pad to square, resize to thumbnail) using the sidecar, so a thumbnail tile maps exactly to a WSI level-0 region. Tiles overlapping padding are clipped; tiles entirely in padding return `None`.
+
+### 7.3 p95 region selection
+
+`glioma_sparse.interpret.highres_extraction` selects the strongest-signal tiles by the **p95 rule**: keep tiles at or above the 95th percentile of the risk map, drop tiles that fail a tissue filter, sort by R, and cap at four per slide. Each selected tile is re-read from the WSI at high resolution (default 2048x2048).
+
+### 7.4 Building the Stage B cohort
+
+`build_stageB_cohort.py` produces the full Stage B dataset, per fold and leakage-safe. For each of the five folds, that fold's Stage A model extracts all of that fold's slides (train, val, test). Each region inherits the slide's split role, so a slide's test regions are never selected by a model that trained on it. Control slides are skipped.
 
 ```
-0 = control
-1 = low_grade
-2 = high_grade
+python -m scripts.stage_b.build_stageB_cohort ^
+    --splits-dir splits ^
+    --checkpoints-glob "training_output/*_split_0*/best_auc.pth" ^
+    --model resnet18 ^
+    --control-image data/included/control/<control_id>.jpg ^
+    --sidecar-root data/ebrains_thumbnails ^
+    --wsi-root path/to/WHO2021_data ^
+    --out-dir data/stage_b_cohort
 ```
 
-- Supports:
-  - transforms
-  - patch shuffling
-  - predefined splits via `paths`
+Key behaviours:
+- **Sidecar resolution.** The split CSVs point at grade-organised thumbnails that do not carry sidecars, so each slide's sidecar and thumbnail are resolved by slide id under `--sidecar-root` (`<subtype>/included/`), and used for tiling and mapping.
+- **WSI resolution.** The stored WSI path is tried as-is, then a prefix swap (`--wsi-old-prefix`/`--wsi-new-prefix`), then a recursive search by filename under `--wsi-root`. This survives the slides being moved.
+- **Molecular subtype and grade** are derived from the ebrains subtype folder:
+
+  ```
+  astro_IDHmt_G2/G3/G4        -> IDH_mt          (grade 2/3/4)
+  oligo_IDHmt_1p19qdel_G2/G3  -> IDH_mt_1p19q    (grade 2/3)
+  GBM_IDHwt                   -> IDH_wt          (grade 4)
+  ```
+
+  Grade 2 maps to grade class **low**, grades 3 and 4 map to **high**.
+
+### 7.5 Cohort layout and manifests
+
+```
+data/stage_b_cohort/
+  stageB_manifest.csv          all folds combined
+  manifests/
+    stageB_fold1.csv           one manifest per fold
+    ... stageB_fold5.csv
+  patches/
+    fold_<k>/IDH_mt/           high-resolution patches
+    fold_<k>/IDH_mt_1p19q/
+    fold_<k>/IDH_wt/
+```
+
+Each manifest row carries the slide id, fold, split role, true entity, true subtype folder, true grade (2/3/4), true grade class (low/high), true mutation, the Stage A predicted grade and grade class with a correctness flag, the three predicted probabilities, the region's grid position, risk value, p95 threshold, tissue fraction, base and target MPP, the WSI bounding box, and the patch, thumbnail, and WSI paths.
+
+Check coverage and split integrity before training Stage B:
+
+```
+python -m scripts.stage_b.stageB_dataset data/stage_b_cohort/stageB_manifest.csv
+```
+
+This reports per-fold train/val/test counts and confirms every slide sits in exactly one split within a fold.
 
 ---
 
-### 4.2 Reproducibility (IMPORTANT)
+## 8. STAGE B TRAINING
 
-Seeding is centralized:
+Train one fold per run. Stage B reads that fold's manifest, trains on the high-resolution patches with molecular labels, and soft-votes patch probabilities to a slide-level subtype for evaluation.
 
 ```
-glioma_sparse.utils.seeding
+python -m scripts.stage_b.train_stageB --fold 1
+python -m scripts.stage_b.train_stageB --fold 2
+...
 ```
 
-Includes:
-- torch
-- numpy
-- random
-- CUDA
-- per-worker DataLoader seeds
+Details:
+- **Classes**: `IDH_mt`, `IDH_mt_1p19q`, `IDH_wt`.
+- **Splits** come from the manifest's `split` column, so all patches of one slide share a split. Patch paths are rebuilt from `--cohort-dir` (default `data/stage_b_cohort`), so moving the cohort does not break training.
+- **Augmentation**: `Patch(8)` on the training set by default (`USE_PATCH_SHUFFLE`), matching Stage A. Validation and test use intact patches.
+- **Imbalance**: class-weighted loss by default, oversampling optional.
+- **Evaluation**: patch probabilities are averaged per slide (soft-vote) to a slide-level prediction, which is the reported result. Both slide-level and patch-level raw outputs are saved.
 
-Ensures:
-- deterministic splits
-- reproducible training runs
+Each run writes to `training_output_stageB/<timestamp>_resnet18_stageB_fold<k>_cw/`, with `test_predictions.npz` and `val_predictions.npz` at slide level (plus `_patch.npz`), `metrics_<split>.json`, confusion and ROC plots, `config.json`, checkpoints, and `efficiency.json`.
+
+Quadratic weighted kappa appears in the metrics because the shared metric function always computes it, but the molecular subtypes are not ordinal, so for Stage B rely on accuracy, macro-AUC, macro-F1, and the per-class numbers.
 
 ---
 
-### 4.3 Train / Val / Test Split
+## 9. AGGREGATING RESULTS ACROSS FOLDS
 
-- Default: 80 / 10 / 10 split
-- Stratified on labels
-- Saved to:
+The same aggregation reads Stage A and Stage B runs, since both save slide-level `test_predictions.npz` and `efficiency.json`.
 
-```
-training_output/<experiment_name>/data_split.csv
-```
-
-- Can be reused via:
+Stage A:
 
 ```
-USE_EXISTING_SPLIT = True
+python -m scripts.data.aggregate_splits --base-dir training_output --split test
 ```
+
+Stage B:
+
+```
+python -m scripts.data.aggregate_splits --base-dir training_output_stageB --split test
+```
+
+It recomputes metrics per fold with the shared metric function, then writes: `aggregate_metrics_per_split.csv` (one row per fold), `aggregate_summary.csv` (mean, std, and a ready-to-paste "mean ± std" per metric), `aggregate_efficiency.csv` (compute cost, mean ± std), and a four-panel `aggregate_figure.png`/`.pdf` (overall metrics with error bars, per-class recall, mean confusion matrix, and a compute-cost table). It also computes performance-per-compute ratios where efficiency data is present.
+
+Report the headline as the five-fold mean ± std, which captures variation from the data partition on top of within-fold sampling noise.
 
 ---
 
-### 4.4 Patch Shuffle (Core idea)
+## 10. ABLATIONS
 
-Module:
-
-```
-Patch(grid_size=8)
-```
-
-- Splits image into grid
-- Randomly permutes patches
-- Applied at every sample access
-
-Ensures the model is invariant to tile position, which is a prerequisite for the patch-injection interpretability of Stage A (Section 5).
+- **Injection-site stability** (`scripts/stage_a/injection_site_ablation.py`): inject one important tile into every one of the 64 control sites and measure the spread of R. A small coefficient of variation is evidence that R reflects tile content, not position.
+- **Fixed-site injection** (`scripts/stage_a/fixed_site_injection.py`): inject every target tile into one fixed control slot, so the displaced control tile is constant and R reflects tile content alone. Compare its p95 set to the standard same-position map.
+- **Injection demo** (`scripts/demo/injection_demo.py`): explainer figure of the mechanism, with a fixed-site default and a `--same-position` flag.
+- **Model size and no-shuffle**: rerun Stage A on the same five splits with `--model resnet50`, or with `USE_PATCH_SHUFFLE = False`, for the compute and interpretability-validity arguments. Anything framed as a performance claim uses the full five folds.
 
 ---
 
-### 4.5 Class Imbalance Handling
+## 11. OUTPUTS
 
-Two strategies:
-
-#### Option A. Oversampling
+### Stage A / Stage B run
 
 ```
-USE_OVERSAMPLING = True
+training_output[_stageB]/<experiment_name>/
+  config.json
+  log.csv
+  data_split.csv                (Stage A)
+  best_auc.pth  best_f1.pth  best_acc.pth  last.pth
+  val_predictions.npz   test_predictions.npz
+  (Stage B also: *_predictions_patch.npz)
+  metrics_val.json      metrics_test.json
+  confusion_matrix_*.png  roc_curve_*.png  training curves
+  efficiency.json
 ```
 
-- Balances dataset via duplication
-- Works well with patch shuffle
-
-#### Option B. Class-weighted loss (recommended)
+### Aggregation
 
 ```
-USE_CLASS_WEIGHTED_LOSS = True
+<base-dir>/aggregate/
+  aggregate_metrics_per_split.csv
+  aggregate_summary.csv
+  aggregate_efficiency.csv
+  aggregate_figure.png / .pdf
 ```
-
-- Uses normalised inverse-frequency weighting:
-  `w_i = total / (num_classes * count_i)`
-- Weights average to 1.0 in the balanced case, so loss magnitudes are
-  comparable to an unweighted run.
-- More stable than oversampling
-
-The two strategies are mutually exclusive (an assertion enforces this).
-
----
-
-### 4.6 Model
-
-```
-build_model("resnet18", num_classes=3)
-```
-
-- Lightweight baseline
-- Suitable for resource-efficient experiments
-- Replaceable with:
-  - ResNet34
-  - ResNet50
-  - custom architectures
-
----
-
-### 4.7 Training
-
-Handled by:
-
-```
-Trainer
-```
-
-Includes:
-
-- Forward + backward pass
-- Validation loop
-- Metrics:
-  - Accuracy
-  - F1
-  - AUC
-- Logging:
-  - per epoch
-  - CSV output
-- Checkpointing:
-  - best_auc.pth
-  - best_f1.pth
-  - best_acc.pth
-  - last.pth
-- Early stopping (optional)
-
-Final validation and test evaluation are run on the best checkpoint (selected by `BEST_CHECKPOINT_METRIC`, default "auc"), not on the last-epoch state.
-
----
-
-### 4.8 Evaluation Outputs
-
-Generated automatically:
-
-- Training curves:
-  - loss_curve.png
-  - auc_curve.png
-  - f1_curve.png
-  - accuracy_curve.png
-
-- Confusion matrices:
-  - confusion_matrix_val_raw.png
-  - confusion_matrix_val_norm.png
-  - confusion_matrix_test_raw.png
-  - confusion_matrix_test_norm.png
-
-- ROC curves:
-  - roc_curve_val.png
-  - roc_curve_test.png
-
-All plots use the fixed class order.
-
----
-
-### 4.9 Compute Tracking
-
-Trainer logs:
-
-- Epoch time
-- Total training time
-- AUC per hour
-
-Supports reporting of:
-- efficiency
-- scalability
-
----
-
-## 5. PATCH INJECTION AND STAGE B DATASET GENERATION
-
-The `interpret/` module turns Stage A predictions into spatially-localised explanations and, in the same step, produces the high-resolution patches that feed Stage B. The script `scripts/extract_risk_region.py` is the user-facing entry point that wraps the module for single-slide inspection, per-class batch processing, and full Stage B dataset construction.
-
----
-
-### 5.1 Patch-Injection Risk Map
-
-Module:
-
-```
-glioma_sparse.interpret.patch_injection
-```
-
-Idea. For a target slide that Stage A predicts as class `p`, replace the tile at position (r, c) of a control slide with the target slide's tile at the same position, run the model on the modified image, and record how much the predicted probability of class `p` changes. The control slide is shuffled once with a fixed seed so that its own tile arrangement carries no positional information.
-
-```
-risk_map[r, c] = P_with_injected_target_tile(class p)  -  P_control_alone(class p)
-```
-
-Positive values mean the injected tile increased the model's confidence in class `p`. Higher values therefore mean "more indicative of class p".
-
-Why this works for our pipeline. Training uses random patch permutation (Section 4.4), which makes the model invariant to tile position, so the risk score reflects only the tile's content rather than its location on the slide.
-
-Direct module usage (rarely needed; prefer the script in 5.4):
-
-```python
-from glioma_sparse.interpret import compute_risk_map
-
-risk_map, target_class = compute_risk_map(
-    target_img=target_thumbnail,
-    control_img=control_thumbnail,
-    model=stage_a_model,
-    transform=eval_transform,
-    grid=(8, 8),
-    device="cuda",
-)
-```
-
----
-
-### 5.2 Coordinate Mapping (Thumbnail → WSI)
-
-Module:
-
-```
-glioma_sparse.interpret.wsi_mapping
-```
-
-A naive mapping `scale = wsi_dim / thumbnail_dim` is wrong, because the thumbnail goes through three transformations during preprocessing:
-
-1. WSI level 0 resampled to target MPP, producing a tissue image of size `(Wt, Ht)`.
-2. Tissue image padded to a square canvas of side `S = max(Wt, Ht)`.
-3. Canvas resized to the final thumbnail size `T` (e.g. 2048).
-
-Each thumbnail's sidecar (Section 3.2) records every parameter of these transformations, so the mapping is recovered exactly without re-opening the WSI:
-
-```python
-from glioma_sparse.interpret import load_mapping, thumbnail_bbox_to_wsi
-
-mapping  = load_mapping("path/to/thumbnail.jpg")
-wsi_bbox = thumbnail_bbox_to_wsi(mapping, (px_left, py_top, px_right, py_bottom))
-# wsi_bbox = (wx, wy, ww, wh) suitable for openslide.read_region((wx, wy), 0, (ww, wh))
-# or None if the thumbnail bbox falls entirely in padding
-```
-
-The function handles padding correctly: a tile that overlaps the padding band is automatically clipped to the tissue region before being mapped, and a tile that lies entirely in padding returns `None`.
-
----
-
-### 5.3 High-Resolution Patch Extraction
-
-Module:
-
-```
-glioma_sparse.interpret.highres_extraction
-```
-
-Given a thumbnail, its Stage-A risk map, and `k`, this function selects the top-`k` highest-risk tiles (after filtering out tiles whose thumbnail content is mostly padding), maps each one back to WSI level-0 coordinates using the sidecar, reads the region with OpenSlide, and writes a `(output_size × output_size)` JPG (default 2048 × 2048) per patch.
-
-Direct module usage:
-
-```python
-from glioma_sparse.interpret import extract_topk_patches
-
-results = extract_topk_patches(
-    thumbnail_path="data/included/slide.jpg",
-    risk_map=risk_map,
-    k=5,
-    output_size=2048,
-    label=class_names[target_class],
-)
-```
-
-Output files are named `<slide_id>_rankNN_r<r>c<c>_<label>.jpg`.
-
----
-
-### 5.4 Script: extract_risk_region.py
-
-Script:
-
-```
-scripts/extract_risk_region.py
-```
-
-The script loads the Stage A model and the canonical control image once, then runs the per-slide pipeline (predict, compute risk map, save overlays, extract top-k patches) in three operational modes selected by the `MODE` variable at the top of the file.
-
-#### Mode: single
-
-Process one thumbnail or one raw WSI. If the input is a WSI (`.ndpi`, `.svs`, `.mrxs`, `.tif`, `.tiff`), a thumbnail and matching sidecar are generated on the fly in a `tmp/` subdirectory.
-
-Outputs (per slide):
-
-```
-risk_output_<stem>/
-  overlay.jpg              ← smooth heatmap on the thumbnail
-  grid_risk_map.jpg        ← per-tile coloured grid + colourbar
-  patches/                 ← top-k high-resolution patches
-  tmp/                     ← intermediate thumbnail + sidecar
-```
-
-Use this mode for figure generation, qualitative inspection, and demos.
-
-#### Mode: batch
-
-Process every thumbnail or WSI inside one folder with one label. Used to build the Stage B input cohort for a single molecular class.
-
-Required setting: `label_override`, a string carried into the filename of every extracted patch (e.g. `"IDH_mut_1p19qCD"`).
-
-Outputs:
-
-```
-<output_root>/
-  patches/                 ← flat directory, all patches across the batch
-  overlays/                ← optional, only if save_overlays=True
-  batch_summary.csv        ← per-slide prediction + probabilities + n_patches
-  batch_failures.csv       ← only if any slide failed
-  tmp/                     ← intermediate thumbnails for WSI inputs
-```
-
-`batch_summary.csv` and `batch_failures.csv` are append-aware. Running the script again with the same `output_root` (for example to add a new class) concatenates results rather than overwriting them.
-
-#### Mode: batch_all_classes
-
-Iterate over the molecular-class mapping in one run. This builds the complete Stage B training dataset.
-
-Mapping (WHO 2021):
-
-```
-oligo_IDHmt_1p19qdel_G2   →  IDH_mut_1p19qCD
-oligo_IDHmt_1p19qdel_G3   →  IDH_mut_1p19qCD
-astro_IDHmt_G2            →  IDH_mut
-astro_IDHmt_G3            →  IDH_mut
-astro_IDHmt_G4            →  IDH_mut
-GBM_IDHwt                 →  IDH_wt
-```
-
-Control is excluded (no molecular subtype to predict).
-
-Output structure is identical to `batch`, with patches from all classes accumulating in `output_root/patches/`. Filenames encode the molecular class:
-
-```
-<output_root>/patches/
-  <slide_id>_rank01_r<r>c<c>_IDH_mut_1p19qCD.jpg
-  <slide_id>_rank02_r<r>c<c>_IDH_mut_1p19qCD.jpg
-  ...
-  <slide_id>_rank01_r<r>c<c>_IDH_mut.jpg
-  ...
-  <slide_id>_rank01_r<r>c<c>_IDH_wt.jpg
-  ...
-```
-
-This folder is the input directory for Stage B training (`DATA_DIR` in the upcoming `train_stage_b.py`).
-
-#### Design notes
-
-- The model, transform, and control image are loaded once per script invocation, not per slide.
-- The risk map is always computed for the **predicted** class from Stage A. The `label_override` only sets the molecular label written into patch filenames.
-- Overlays are off by default in batch mode (slow, not needed for training data); turn them on with `save_overlays=True` if you want a visual record.
-- The canonical control thumbnail is fixed per project. Change it only if you know why.
-
----
-
-## 6. CLUSTER USAGE (SLURM)
-
-Training can be run on GPU clusters (e.g. oaks-lab).
-
----
-
-### 6.1 SLURM Script
-
-Example:
-
-```
-train_glioma_sparse.slurm
-```
-
-Uses:
-- 1 GPU
-- 8 CPUs
-- 64 GB RAM
-- conda environment (no container required)
-
-Key paths:
-
-```
-/data/pathology/projects/tareq/Glioma-SPARSE
-```
-
----
-
-### 6.2 Submit Job
-
-From project directory:
-
-```
-sbatch train_glioma_sparse.slurm resnet18
-```
-
----
-
-### 6.3 Monitor Job
-
-```
-squeue -u $USER
-```
-
-Logs:
-
-```
-/home/<user>/logs/slurm-<jobid>.out
-```
-
----
-
-## 7. OUTPUTS
-
-### Stage A training
-
-```
-training_output/<experiment_name>/
-
-config.json
-log.csv
-data_split.csv
-
-best_auc.pth
-best_f1.pth
-best_acc.pth
-last.pth
-
-loss_curve.png
-auc_curve.png
-f1_curve.png
-accuracy_curve.png
-
-confusion_matrix_val_raw.png
-confusion_matrix_val_norm.png
-confusion_matrix_test_raw.png
-confusion_matrix_test_norm.png
-
-roc_curve_val.png
-roc_curve_test.png
-```
-
----
 
 ### Preprocessing
 
 ```
-data/<class>/
-  included/
-    <slide_id>.jpg
-    <slide_id>.json        ← mapping sidecar
-  low_tissue/
-    <slide_id>.jpg
-    <slide_id>.json
-  metadata.csv
-```
-
-`metadata.csv` columns:
-
-```
-slide_path
-thumbnail_path
-sidecar_path
-tissue_fraction
-effective_tissue_fraction
-included
-processing_time_sec
-success
-error
+data/.../included/<slide_id>.jpg + <slide_id>.json
+data/.../low_tissue/...
+metadata.csv
 ```
 
 ---
 
-### Stage A interpretation, single mode
+## 12. NOTES AND NEXT STEPS
 
-```
-risk_output_<slide_stem>/
-  overlay.jpg
-  grid_risk_map.jpg
-  patches/
-    <slide_id>_rank01_r<r>c<c>_<predicted_class>.jpg
-    ...
-```
+Notes:
+- Thumbnails are 2048x2048 JPGs (quality 90) at 4.0 µm/pixel, each with a JSON sidecar.
+- The risk score R and the p95 selection are computed on the class logit.
+- Class ordering is fixed across dataset, training, and evaluation.
+- The pipeline is reproducible end to end: the split CSVs, `config.json`, and `efficiency.json` make every run traceable.
+- Report five-fold mean ± std, and treat Stage A threshold tuning as a pre-specified sensitivity analysis.
 
----
-
-### Stage B input cohort (batch or batch_all_classes mode)
-
-```
-stage_b_training_data/
-  patches/
-    <slide_id>_rank01_r<r>c<c>_IDH_mut_1p19qCD.jpg
-    <slide_id>_rank01_r<r>c<c>_IDH_mut.jpg
-    <slide_id>_rank01_r<r>c<c>_IDH_wt.jpg
-    ...
-  overlays/                  ← only if save_overlays=True
-  batch_summary.csv
-  batch_failures.csv         ← if any slide failed
-```
-
----
-
-## NOTES
-
-- Thumbnails saved as JPG (quality=90)
-- Each thumbnail has a JSON sidecar with the WSI mapping
-- Explicit class ordering enforced across:
-  - dataset
-  - training
-  - evaluation
-- Designed for:
-  - local machines
-  - GPU clusters
-- Fully reproducible experiment structure
-
----
-
-## NEXT STEPS
-
-- Stage B training script (`scripts/train_stage_b.py`)
-- End-to-end inference pipeline (Stage A → patch extraction → Stage B → soft-vote)
-- YAML config system
-- Mixed precision (AMP)
-- Inference timing per slide
-- External validation datasets
+Next steps:
+- End-to-end inference (Stage A -> p95 extraction -> Stage B -> soft-vote) with a single shipped model per stage.
+- External validation cohort (e.g. TCGA) as a generalisation test, added alongside the internal five-fold result.
+- Benchmark rerun on the same five splits for a matched comparison.
+- YAML config system and mixed precision (AMP).
