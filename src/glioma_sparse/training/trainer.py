@@ -21,7 +21,7 @@ class Trainer:
         early_stopping_metric="auc",
         patience=12,
         min_delta=1e-4,
-        save_every_epoch=True
+        save_every_epoch=False
     ):
         self.model = model
         self.train_loader = train_loader

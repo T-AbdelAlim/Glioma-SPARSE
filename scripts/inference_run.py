@@ -9,14 +9,14 @@ def main():
     # CONFIG (edit freely)
     # --------------------------------------------------
     input_path = Path(
-        r"C:\Users\Tareq\pythonProject\Glioma-SPARSE\data\ebrains_thumbnails\control\included"
+        r"..\data\ebrains_thumbnails\control\included"
     )
 
     checkpoint_path = Path(
-        r"C:\Users\Tareq\pythonProject\Glioma-SPARSE\training_output\20260526_0947_resnet34_cw\best_auc.pth"
+        r"..\training_output\20260703_0928_resnet18_cw_split_03\best_f1.pth"
     )
 
-    model_name = "resnet34"
+    model_name = "resnet18"
 
     # --------------------------------------------------
     # STAGE A

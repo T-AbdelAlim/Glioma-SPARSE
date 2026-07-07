@@ -1,0 +1,37 @@
+# ============================================================
+# PYTORCH (INSTALL SEPARATELY FOR CUDA)
+# ============================================================
+
+# CUDA 12.4 (deskt.)
+# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+
+# CUDA 12.1 (lapt.)
+# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# CPU ONLY
+# pip install torch torchvision torchaudio
+
+# ============================================================
+# CORE
+# ============================================================
+
+numpy
+pandas
+scikit-learn
+matplotlib
+opencv-python
+Pillow
+tqdm
+
+# ============================================================
+# WSI / PATHOLOGY
+# ============================================================
+
+openslide-python
+openslide-bin
+
+# ============================================================
+# MODELS
+# ============================================================
+
+timm

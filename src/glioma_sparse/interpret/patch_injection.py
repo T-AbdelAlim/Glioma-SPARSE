@@ -78,6 +78,7 @@ def compute_risk_map(
     device="cuda",
     control_shuffle_seed=42,
     batch_size=8,
+    score="logit",
 ):
     """
     Compute a (rows, cols) risk map by patch injection.
@@ -88,17 +89,32 @@ def compute_risk_map(
         model: trained Stage A classifier (already on `device`)
         transform: eval transform (same as inference)
         grid: (rows, cols) tile grid
-        target_class: class index for which to measure delta P. If None, uses argmax
-                      of the model's prediction on target_img.
+        target_class: class index for which to measure the shift. If None, uses
+                      argmax of the model's prediction on target_img.
         device: 'cuda' or 'cpu'
         control_shuffle_seed: fixed seed for the once-only control shuffle
         batch_size: how many injected variants to forward in one batch
+        score: 'logit' (default) or 'prob'. The risk score R is the shift in the
+               model's output for `target_class` when a tile is injected. On a
+               confident model the softmax probability saturates near 0 or 1, so
+               a single injected tile barely moves it and R collapses to ~0. The
+               logit keeps that contrast, so it is the default. Use 'prob' only
+               when you explicitly want the probability-scale shift.
 
     Returns:
         risk_map: float32 ndarray of shape (rows, cols).
-                  risk_map[r, c] = P_injected[target_class] - P_baseline[target_class]
+                  risk_map[r, c] = score_injected[target_class]
+                                   - score_baseline[target_class]
         target_class: the class index that was used (useful when caller passed None)
     """
+    if score not in ("logit", "prob"):
+        raise ValueError("score must be 'logit' or 'prob'")
+
+    def read_score(logits_tensor):
+        """Return the per-sample score matrix for the chosen scale."""
+        if score == "prob":
+            return torch.softmax(logits_tensor, dim=1).cpu().numpy()
+        return logits_tensor.cpu().numpy()
     rows, cols = grid
     model.eval()
 
@@ -119,8 +135,8 @@ def compute_risk_map(
     # 4. Baseline: shuffled control with no injection
     with torch.no_grad():
         x = transform(control_shuffled).unsqueeze(0).to(device)
-        probs = torch.softmax(model(x), dim=1).cpu().numpy()[0]
-        baseline_prob = float(probs[target_class])
+        baseline_scores = read_score(model(x))[0]
+        baseline = float(baseline_scores[target_class])
 
     # 5. Build all injected variants (one per tile position)
     injected_variants = []
@@ -141,10 +157,10 @@ def compute_risk_map(
         for start in range(0, len(injected_variants), batch_size):
             batch_imgs = injected_variants[start:start + batch_size]
             batch_x = torch.stack([transform(im) for im in batch_imgs]).to(device)
-            batch_probs = torch.softmax(model(batch_x), dim=1).cpu().numpy()
+            batch_scores = read_score(model(batch_x))
 
             for i, (r, c) in enumerate(positions[start:start + batch_size]):
-                injected_prob = float(batch_probs[i, target_class])
-                risk_map[r, c] = injected_prob - baseline_prob
+                injected = float(batch_scores[i, target_class])
+                risk_map[r, c] = injected - baseline
 
     return risk_map, target_class
