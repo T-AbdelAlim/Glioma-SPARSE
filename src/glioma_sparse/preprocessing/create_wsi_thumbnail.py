@@ -207,6 +207,7 @@ def create_wsi_thumbnail(
     # --------------------------------------------------------
 
     mask_before = create_tissue_mask(img)
+
     tissue_fraction = estimate_fraction(mask_before)
 
     # --------------------------------------------------------

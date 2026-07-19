@@ -1,4 +1,4 @@
-"""
+\r"""
 End-to-end Glioma-SPARSE inference: Stage A grade + Stage B molecular subtype.
 
 Input is a single WSI or a folder of WSIs (.ndpi, .svs, .mrxs). For each slide:
@@ -41,6 +41,9 @@ Run modes:
         --stage-b-glob "training_output_stageB/*_fold*/best_auc.pth" \
         --sidecar-root data/ebrains_thumbnails \
         --wsi-root path/to/WHO2021_data --run-name e2e_testset
+
+e.g. split 2 testset: python -m scripts.inference.inference_end_to_end --testset --splits-dir splits --stage-a-glob "training_output/20260703_0554_resnet18_cw_split_02/best_auc.pth" --stage-b-glob "training_output_stageB/20260705_1203_resnet18_stageB_fold2_cw/best_auc.pth" --sidecar-root "data/ebrains_thumbnails" --wsi-root "C:\Users\TAbde\Documents\EMC_postdoc\Virtual_Biopsy\data\WSI_ebrains\WHO2021_data" --run-name e2e_testset_split_2
+
 """
 
 import argparse
@@ -78,18 +81,18 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 CONFIG = {
     # what to run: "single", "folder", or "testset"
-    "run_mode": "testset",
-    "run_name": "e2e_testset_fold_1",
+    "run_mode": "folder",
+    "run_name": "external_TCGA_val/ext_TCGA_astro_G2",
 
     # single / folder mode
-    "input": r"C:\Users\TAbde\Documents\EMC_postdoc\Virtual_Biopsy\data\WSI_ebrains\WHO2021_data\GBM_IDHwt\GBM_IDHwt\a195bad0-357f-11eb-ae3c-001a7dda7111.ndpi" ,
-    "stage_a_ckpt": r"training_output/20260702_1722_resnet18_cw_split_01/best_auc.pth",
-    "stage_b_ckpt": r"training_output_stageB/20260704_2058_resnet18_stageB_fold1_cw/best_auc.pth",
+    "input": r"E:\Thinkpad_Backup\Data\WSI_datasets\TCGA_data_download\manifest_grades\TCGA_ext_val\low_grade\astro_IDHmt_G2",
+    "stage_a_ckpt": r"C:\Users\TAbde\PycharmProjects\Glioma-SPARSE\ResNet18_output\training_output\20260703_0554_resnet18_cw_split_02/best_auc.pth",
+    "stage_b_ckpt": r"C:\Users\TAbde\PycharmProjects\Glioma-SPARSE\ResNet18_output\training_output_stageB\20260705_1203_resnet18_stageB_fold2_cw/best_auc.pth",
 
     # testset mode (per-fold, leakage-safe)
     "splits_dir": "splits",
-    "stage_a_glob": "training_output/20260702_1722_resnet18_cw_split_01/best_auc.pth",
-    "stage_b_glob": "training_output_stageB/20260704_2058_resnet18_stageB_fold1_cw/best_auc.pth",
+    "stage_a_glob": "ResNet18_output/training_output/20260703_0554_resnet18_cw_split_02/best_auc.pth",
+    "stage_b_glob": "ResNet18_output/training_output_stageB/20260705_1203_resnet18_stageB_fold2_cw/best_auc.pth",
     "sidecar_root": r"data\ebrains_thumbnails",
 
     # shared
@@ -100,7 +103,7 @@ CONFIG = {
     # region selection
     "percentile": 95.0,        # p95 default; set 90 or 97 to change
     "cap": 4,
-    "min_tissue": 0.5,
+    "min_tissue": 0.25,         # default was 0.5 during training
 
     # thumbnailing / patches
     "target_mpp": 4.0,
@@ -109,7 +112,7 @@ CONFIG = {
 
     # Stage B occlusion risk map + cellular zoom
     "stage_b_riskmap": True,
-    "occlusion_topk": 3,       # strongest occlusion tiles re-zoomed per patch
+    "occlusion_topk": 1,       # strongest occlusion tiles re-zoomed per patch
 
     "device": "cuda" if torch.cuda.is_available() else "cpu",
 }

@@ -51,7 +51,7 @@ def parse_args():
 
 EXPERIMENT_NAME = None
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = REPO_ROOT / "data" / "included"
 BASE_OUT_DIR = REPO_ROOT / "training_output"
 
@@ -61,7 +61,7 @@ USE_OVERSAMPLING = False
 USE_CLASS_WEIGHTED_LOSS = True
 USE_EXISTING_SPLIT = False
 
-BEST_CHECKPOINT_METRIC = "auc"
+BEST_CHECKPOINT_METRIC = "f1"
 
 BATCH_SIZE = 8
 NUM_EPOCHS = 80
@@ -473,7 +473,7 @@ def main():
 
     # Epochs actually run (one history entry per completed epoch). With early
     # stopping this is below NUM_EPOCHS, so it explains cross-split time/energy.
-    epochs_run = len(history.get("auc", []))
+    epochs_run = len(history.get("f1", []))
     train_perf["epochs_run"] = epochs_run
     train_perf["epochs_max"] = NUM_EPOCHS
     train_perf["early_stopped"] = epochs_run < NUM_EPOCHS

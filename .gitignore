@@ -34,6 +34,8 @@ data/
 *.tif
 *.tiff
 
+cluster_scripts/
+
 # OS
 .DS_Store
 Thumbs.db

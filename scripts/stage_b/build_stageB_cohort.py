@@ -7,10 +7,12 @@ Design (five-fold, leakage-safe, reusable for end-to-end inference):
   that fold. So Stage B is trained per fold on that fold's train+val regions
   and tested on that fold's test regions, and no slide's TEST regions are ever
   produced by a model that trained on it.
-
-  Every region is written to ONE manifest with `fold` and `split` columns, so
-  Stage B training filters to a fold, and end-to-end inference reuses the same
-  file. Patches carry slide id, fold, and rank in the filename.
+  Every extracted region is written to a combined cohort manifest
+  (`stageB_manifest.csv`) as well as a fold-specific manifest
+  (`manifests/stageB_fold<k>.csv`). The combined manifest is used for
+  end-to-end inference, while the per-fold manifests allow Stage B training
+  to filter directly by fold. Patches carry the slide id, fold, split and
+  region rank in the filename.
 
 Per slide, per fold:
   1. predict grade (default argmax; tuning stays a separate analysis),
@@ -28,7 +30,7 @@ Run (from repo root):
         --control-image data/included/control/<id>.jpg \
         --sidecar-root data/ebrains_thumbnails \
         --wsi-root path/to/WHO2021_data \
-        --out-dir stage_b_cohort
+        --out-dir data/stage_b_cohort_RN50cl
 
 Sidecars and their thumbnails live in <sidecar-root>/<subtype>/included/ and are
 resolved by slide id, since the split CSVs point at grade-organised thumbnails
@@ -393,36 +395,56 @@ def build(args):
     transform = build_eval_transform()
     control_img = Image.open(args.control_image).convert("RGB")
 
-    out_dir = Path(args.out_dir)
-    patches_dir = out_dir / "patches"
+    root_dir = Path(args.out_dir)
+
+    patches_dir = root_dir / "patches"
     patches_dir.mkdir(parents=True, exist_ok=True)
-    manifests_dir = out_dir / "manifests"
+
+    manifests_dir = root_dir / "manifests"
     manifests_dir.mkdir(parents=True, exist_ok=True)
 
     split_csvs = sorted(Path(args.splits_dir).glob(args.split_glob))
     if not split_csvs:
-        raise SystemExit(f"No split CSVs matching {args.split_glob} in {args.splits_dir}")
+        raise SystemExit(
+            f"No split CSVs matching {args.split_glob} in {args.splits_dir}"
+        )
+
     ckpt_map = resolve_checkpoints(split_csvs, args.checkpoints_glob)
 
-    manifest_path = out_dir / "stageB_manifest.csv"
     rows_written = slides_done = slides_failed = 0
 
-    with open(manifest_path, "w", newline="") as mf:
-        combined = csv.DictWriter(mf, fieldnames=MANIFEST_FIELDS)
-        combined.writeheader()
+    # Combined manifest for the entire cohort
+    manifest_path = root_dir / "stageB_manifest.csv"
 
-        for fold_idx, split_csv in enumerate(split_csvs, 1):
+    with open(manifest_path, "w", newline="") as mf:
+        combined_writer = csv.DictWriter(mf, fieldnames=MANIFEST_FIELDS)
+        combined_writer.writeheader()
+
+        for split_csv in split_csvs:
+            m = re.search(r"split_(\d+)", split_csv.stem)
+            if m is None:
+                raise ValueError(
+                    f"Could not determine fold from {split_csv.name}"
+                )
+
+            fold_idx = int(m.group(1))
+
+            fold_manifest = manifests_dir / f"stageB_fold{fold_idx}.csv"
+
             ckpt = ckpt_map.get(split_csv.stem)
+
             if ckpt is None:
                 print(f"[fold {fold_idx}] no checkpoint for {split_csv.stem}, skip")
                 continue
+
             model = load_model(ckpt, args.model, device)
             slides = load_split_rows(split_csv)
-            print(f"\n[fold {fold_idx}] {split_csv.name}: {len(slides)} slides "
-                  f"| ckpt {Path(ckpt).name}")
 
-            # one manifest per fold, alongside the combined one
-            fold_manifest = manifests_dir / f"stageB_fold{fold_idx}.csv"
+            print(
+                f"\n[fold {fold_idx}] {split_csv.name}: {len(slides)} slides "
+                f"| ckpt {Path(ckpt).name}"
+            )
+
             with open(fold_manifest, "w", newline="") as ff:
                 fold_writer = csv.DictWriter(ff, fieldnames=MANIFEST_FIELDS)
                 fold_writer.writeheader()
@@ -430,23 +452,35 @@ def build(args):
                 for thumb_path, role in slides:
                     try:
                         rows = process_slide(
-                            thumb_path, role, model, transform, control_img,
-                            device, fold_idx, split_csv, args, patches_dir)
+                            thumb_path,
+                            role,
+                            model,
+                            transform,
+                            control_img,
+                            device,
+                            fold_idx,
+                            split_csv,
+                            args,
+                            patches_dir,
+                        )
+
                         for row in rows:
-                            combined.writerow(row)
+                            combined_writer.writerow(row)
                             fold_writer.writerow(row)
+
                         rows_written += len(rows)
                         slides_done += 1
+
                     except Exception as e:
                         slides_failed += 1
                         print(f"    FAILED {thumb_path.name}: {e}")
 
-    print(f"\n=== DONE ===")
+    print("\n=== DONE ===")
     print(f"Slide-fold passes: {slides_done} | failed: {slides_failed}")
     print(f"Regions written:   {rows_written}")
     print(f"Combined manifest: {manifest_path}")
     print(f"Per-fold manifests: {manifests_dir}")
-
+    print(f"Patches:           {patches_dir}")
 
 def parse_args():
     p = argparse.ArgumentParser()
@@ -468,7 +502,7 @@ def parse_args():
                         "(preserves subfolder nesting). Use with --wsi-new-prefix.")
     p.add_argument("--wsi-new-prefix", type=str, default=None,
                    help="New path prefix to substitute for --wsi-old-prefix.")
-    p.add_argument("--out-dir", type=str, default="stage_b_cohort")
+    p.add_argument("--out-dir", type=str, default="data/stage_b_cohort_RN50")
     p.add_argument("--percentile", type=float, default=95.0)
     p.add_argument("--cap", type=int, default=4)
     p.add_argument("--min-tissue", type=float, default=0.5)

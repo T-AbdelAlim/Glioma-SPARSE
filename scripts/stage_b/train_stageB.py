@@ -59,7 +59,7 @@ USE_OVERSAMPLING = False
 USE_CLASS_WEIGHTED_LOSS = True
 USE_PATCH_SHUFFLE = True          # Patch(8) augmentation on train, as in Stage A
 
-BEST_CHECKPOINT_METRIC = "auc"
+BEST_CHECKPOINT_METRIC = "f1"
 
 BATCH_SIZE = 8
 NUM_EPOCHS = 80
@@ -433,7 +433,7 @@ def main():
         history, _, _ = trainer.train(NUM_EPOCHS)
     train_perf = dict(train_meter.result)
 
-    epochs_run = len(history.get("auc", []))
+    epochs_run = len(history.get("f1", []))
     train_perf["epochs_run"] = epochs_run
     train_perf["epochs_max"] = NUM_EPOCHS
     train_perf["early_stopped"] = epochs_run < NUM_EPOCHS
