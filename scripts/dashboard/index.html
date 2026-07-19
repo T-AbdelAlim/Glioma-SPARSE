@@ -1,0 +1,773 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Glioma-SPARSE</title>
+<link rel="icon" href="/logo.png">
+<style>
+  :root{
+    --bg:#0e1117; --panel:#161b22; --panel2:#1c232d; --line:#2a323d;
+    --ink:#e6edf3; --mut:#8b949e; --accent:#3b82f6; --accent2:#6366f1;
+    --risk:#e11d1d; --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444;
+    --ctrl:#adcba3; --low:#ffe1a8; --high:#e26d5c;
+    --mt:#a8dadc; --cod:#f1faee; --wt:#457b9d;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  header{display:flex;align-items:center;gap:14px;padding:12px 20px;
+    background:var(--panel);border-bottom:1px solid var(--line)}
+  header img{height:34px}
+  header h1{font-size:17px;margin:0;font-weight:600;letter-spacing:.2px}
+  header .sub{color:var(--mut);font-size:12px;margin-left:4px}
+  header .dev{margin-left:auto;font-size:11px;color:var(--mut);
+    padding:4px 10px;border:1px solid var(--line);border-radius:20px}
+  .wrap{display:grid;grid-template-columns:320px 1fr;gap:0;height:calc(100vh - 59px)}
+  .sidebar{background:var(--panel);border-right:1px solid var(--line);
+    padding:16px;overflow-y:auto}
+  .stage-view{position:relative;overflow:hidden;background:
+    radial-gradient(circle at 30% 20%,#131a24,#0e1117 70%)}
+  svg#stage{width:100%;height:100%;display:block}
+  .group{margin-bottom:18px}
+  .group h3{font-size:11px;text-transform:uppercase;letter-spacing:.7px;
+    color:var(--mut);margin:0 0 8px}
+  label.row{display:flex;align-items:center;justify-content:space-between;
+    gap:8px;margin:6px 0;font-size:13px}
+  input[type=text]{width:100%;background:var(--panel2);border:1px solid var(--line);
+    color:var(--ink);border-radius:7px;padding:8px 10px;font-size:12px}
+  button{background:var(--accent);color:#fff;border:none;border-radius:7px;
+    padding:9px 12px;font-size:13px;font-weight:500;cursor:pointer;width:100%;
+    transition:.15s;margin-top:6px}
+  button:hover{filter:brightness(1.12)}
+  button.sec{background:var(--panel2);border:1px solid var(--line)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  .seg{display:flex;background:var(--panel2);border:1px solid var(--line);
+    border-radius:7px;overflow:hidden}
+  .seg button{margin:0;border-radius:0;background:transparent;font-size:12px;padding:7px}
+  .seg button.on{background:var(--accent);color:#fff}
+  .toggle{display:flex;align-items:center;gap:8px;cursor:pointer;
+    padding:5px 0;font-size:13px;user-select:none}
+  .toggle .box{width:36px;height:20px;border-radius:20px;background:var(--panel2);
+    border:1px solid var(--line);position:relative;transition:.2s;flex:none}
+  .toggle .box::after{content:"";position:absolute;top:2px;left:2px;width:14px;
+    height:14px;border-radius:50%;background:var(--mut);transition:.2s}
+  .toggle.on .box{background:var(--accent)}
+  .toggle.on .box::after{left:18px;background:#fff}
+  input[type=range]{width:100%;accent-color:var(--accent)}
+  .val{color:var(--accent);font-weight:600;font-variant-numeric:tabular-nums}
+  .status{font-size:12px;color:var(--mut);min-height:18px;margin-top:6px}
+  .spinner{display:inline-block;width:12px;height:12px;border:2px solid var(--line);
+    border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;
+    vertical-align:-2px;margin-right:6px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .diag-bar{position:absolute;left:0;right:0;bottom:0;background:
+    linear-gradient(0deg,#0e1117,rgba(14,17,23,.85) 70%,transparent);
+    padding:18px 24px;pointer-events:none}
+  .diag-bar .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:var(--mut)}
+  .diag-bar .dx{font-size:22px;font-weight:600;margin-top:2px}
+  .diag-bar .conf{font-size:13px;color:var(--mut);margin-top:2px}
+  .legend{position:absolute;top:14px;right:16px;background:rgba(22,27,34,.9);
+    border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:11px;
+    max-width:210px}
+  .legend .k{display:flex;align-items:center;gap:6px;margin:3px 0}
+  .legend .sw{width:11px;height:11px;border-radius:3px;flex:none}
+  .pill{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;
+    font-weight:600}
+  .card{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
+    padding:10px;margin-top:8px;font-size:12px}
+  .card .k{color:var(--mut)}
+  .bars{margin-top:4px}
+  .bar{display:flex;align-items:center;gap:6px;margin:3px 0}
+  .bar .name{width:78px;color:var(--mut);font-size:11px}
+  .bar .track{flex:1;height:8px;background:var(--panel);border-radius:5px;overflow:hidden}
+  .bar .fill{height:100%;border-radius:5px;transition:width .5s ease}
+  .bar .pct{width:34px;text-align:right;font-variant-numeric:tabular-nums;font-size:11px}
+  .hidden{display:none !important;}
+</style>
+</head>
+<body>
+<header>
+  <img src="/logo.png" alt="Glioma-SPARSE" onerror="this.style.display='none'">
+  <h1>Glioma-SPARSE <span class="sub">interactive pipeline</span></h1>
+  <div class="dev" id="dev">device: …</div>
+</header>
+
+<div class="wrap">
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+    <div class="group">
+      <h3>1 · Import slide</h3>
+      <div style="display:flex;gap:6px">
+        <input type="text" id="slidePath" placeholder="C:\path\to\slide.ndpi" style="flex:1">
+        <button id="btnBrowse" class="sec" style="width:auto;margin-top:0;padding:8px 12px;white-space:nowrap">Browse…</button>
+      </div>
+      <button id="btnImport">Import &amp; build thumbnail</button>
+      <div class="status" id="importStatus"></div>
+    </div>
+
+    <div class="group">
+      <h3>2 · Models (fold locked: split_02)</h3>
+      <label class="row">Stage A
+        <span class="seg" id="segA">
+          <button data-a="resnet18">RN18</button>
+          <button data-a="resnet50" class="on">RN50</button>
+        </span>
+      </label>
+      <label class="row">Stage B
+        <span class="seg" id="segB">
+          <button data-b="resnet18">RN18</button>
+          <button data-b="resnet50" class="on">RN50</button>
+        </span>
+      </label>
+    </div>
+
+    <div class="group">
+      <h3>3 · Parameters</h3>
+      <label class="row">Risk percentile <span class="val" id="pctVal">95</span></label>
+      <input type="range" id="pct" min="80" max="97" value="95" step="1">
+      <div class="status" id="pctInfo" style="margin-top:2px">top 5% → up to 4 of 64 tiles into Stage B</div>
+      <div class="toggle on" id="tSignal" style="margin-top:10px"><div class="box"></div>Signal map overlay</div>
+      <div class="toggle on" id="tPred"><div class="box"></div>Class predictions</div>
+      <div class="toggle" id="tRaw"><div class="box"></div>Raw values (p, uncertainty)</div>
+      <div class="toggle" id="tOccl"><div class="box"></div>Stage B occlusion heatmap</div>
+    </div>
+
+    <div class="group">
+      <h3>4 · Run</h3>
+      <button id="btnRun" disabled>▶ Run full pipeline</button>
+      <button class="sec" id="btnReplay" disabled>↻ Replay animation</button>
+      <div class="status" id="runStatus"></div>
+    </div>
+
+    <div class="group">
+      <h3>5 · Export &amp; load</h3>
+      <button class="sec" id="btnSave" disabled>💾 Save results</button>
+      <div class="status" id="saveStatus"></div>
+      <button class="sec" id="btnLoad" style="margin-top:10px">📂 Load previous result</button>
+      <div class="status" id="loadStatus"></div>
+    </div>
+  </div>
+
+  <!-- STAGE -->
+  <div class="stage-view">
+    <svg id="stage" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid meet"></svg>
+    <div class="legend" id="legend">
+      <div style="font-weight:600;margin-bottom:5px">Grade</div>
+      <div class="k"><span class="sw" style="background:var(--ctrl)"></span>control</div>
+      <div class="k"><span class="sw" style="background:var(--low)"></span>low grade</div>
+      <div class="k"><span class="sw" style="background:var(--high)"></span>high grade</div>
+      <div style="font-weight:600;margin:6px 0 5px">Molecular</div>
+      <div class="k"><span class="sw" style="background:var(--mt)"></span>IDH-mt astro</div>
+      <div class="k"><span class="sw" style="background:var(--cod)"></span>IDH-mt 1p/19q</div>
+      <div class="k"><span class="sw" style="background:var(--wt)"></span>IDH-wt</div>
+    </div>
+    <div class="diag-bar">
+      <div class="lbl">Integrated diagnosis</div>
+      <div class="dx" id="dxText">—</div>
+      <div class="conf" id="dxConf"></div>
+    </div>
+    <!-- click-to-inspect overlay -->
+    <div id="inspect" class="hidden" style="position:absolute;inset:0;
+      background:rgba(8,11,16,.92);z-index:20;align-items:center;
+      justify-content:center;padding:30px">
+      <div style="background:var(--panel);border:1px solid var(--line);border-radius:12px;
+        max-width:860px;width:100%;max-height:100%;overflow:auto;padding:20px;display:flex;gap:20px">
+        <div style="flex:none">
+          <svg id="inspSvg" width="380" height="380" viewBox="0 0 380 380"
+            style="border-radius:8px;border:1px solid var(--line);display:block">
+            <image id="inspImg" x="0" y="0" width="380" height="380"/>
+            <g id="inspOccl"></g>
+          </svg>
+          <div id="inspZoomWrap" class="hidden" style="margin-top:10px">
+            <div style="font-size:11px;color:var(--mut);margin-bottom:4px">
+              Top occlusion cell · level-0 zoom</div>
+            <img id="inspZoom" style="width:180px;height:180px;border-radius:6px;
+              border:2px solid #fde047;object-fit:cover">
+          </div>
+        </div>
+        <div style="flex:1;min-width:220px">
+          <div style="display:flex;justify-content:space-between;align-items:start">
+            <h2 id="inspTitle" style="margin:0;font-size:16px">Patch</h2>
+            <button onclick="closeInspect()" style="width:auto;margin:0;padding:6px 12px"
+              class="sec">✕ Close</button>
+          </div>
+          <div id="inspMeta" class="card"></div>
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:.7px;
+            color:var(--mut);margin:14px 0 6px">Stage B molecular prediction</div>
+          <div id="inspBars"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const SVGNS="http://www.w3.org/2000/svg";
+const API=(p,b)=>fetch("/api/"+p,{method:"POST",headers:{"Content-Type":"application/json"},
+  body:JSON.stringify(b)}).then(async r=>{if(!r.ok)throw new Error((await r.json()).detail||r.statusText);return r.json()});
+const $=id=>document.getElementById(id);
+const el=(t,a={})=>{const e=document.createElementNS(SVGNS,t);for(const k in a)e.setAttribute(k,a[k]);return e};
+let INSTANT=false;
+const sleep=ms=>INSTANT?Promise.resolve():new Promise(r=>setTimeout(r,ms));
+// fade an element in; in INSTANT mode set the final opacity directly (a
+// 0-duration WAAPI animation does not reliably commit before paint).
+function fadeIn(elem,to=1,{duration=350,delay=0}={}){
+  if(INSTANT){elem.setAttribute("opacity",to);return;}
+  elem.setAttribute("opacity","0");
+  elem.animate([{opacity:0},{opacity:to}],{duration,delay,fill:"forwards"});
+}
+const COL={control:"#adcba3",low_grade:"#ffe1a8",high_grade:"#e26d5c",
+  IDH_mt:"#a8dadc",IDH_mt_1p19q:"#f1faee",IDH_wt:"#457b9d"};
+// text colour that stays legible on each fill (light fills need dark ink)
+const INK={control:"#3a3a2e",low_grade:"#6b4e18",high_grade:"#fff",
+  IDH_mt:"#1d3a3d",IDH_mt_1p19q:"#2a3a30",IDH_wt:"#fff"};
+
+let S={session:null,archA:"resnet50",archB:"resnet50",
+  signal:true,pred:true,raw:false,occl:false,
+  thumb:null,thumbSize:2048,thumbW:2048,thumbH:2048,wsiDim:null,
+  gridR:8,gridC:8,
+  selected:[],risk:null,lastRun:null,
+  lastCfg:null};   // {archA,archB,pct} of the last successful run, for incremental reuse
+const ARCH_LABEL={resnet18:"ResNet18",resnet50:"ResNet50"};
+
+// ---- config ----
+API("../api/config",{}).catch(()=>fetch("/api/config").then(r=>r.json())).then(()=>{});
+fetch("/api/config").then(r=>r.json()).then(c=>{$("dev").textContent="device: "+c.device;});
+
+// ---- toggles & segments ----
+function bindToggle(id,key){$(id).onclick=()=>{S[key]=!S[key];$(id).classList.toggle("on",S[key]);
+  if(S.lastRun)renderStatic();}}
+bindToggle("tSignal","signal");bindToggle("tPred","pred");bindToggle("tRaw","raw");
+$("tOccl").onclick=async()=>{
+  S.occl=!S.occl;$("tOccl").classList.toggle("on",S.occl);
+  if(!S.lastRun)return;
+  if(S.occl){
+    // compute occlusion for any current tiles that lack it, then re-render
+    if(!S.session){renderStatic();return;}   // loaded result: no live model
+    const need=S.lastRun.patches.filter(p=>!S.lastRun.occl[p.row+"_"+p.col]);
+    if(need.length){
+      const st=$("runStatus");
+      for(const p of need){
+        st.innerHTML=`<span class="spinner"></span>occlusion r${p.row}c${p.col}…`;
+        S.lastRun.occl[p.row+"_"+p.col]=await API("stage_b_occlusion",
+          {session_id:S.session,row:p.row,col:p.col,arch:S.archB});
+      }
+      st.textContent="✓ occlusion ready";
+    }
+  }
+  renderStatic();
+};
+$("segA").onclick=e=>{if(e.target.dataset.a){S.archA=e.target.dataset.a;
+  [...$("segA").children].forEach(b=>b.classList.toggle("on",b.dataset.a===S.archA));}};
+$("segB").onclick=e=>{if(e.target.dataset.b){S.archB=e.target.dataset.b;
+  [...$("segB").children].forEach(b=>b.classList.toggle("on",b.dataset.b===S.archB));}};
+$("pct").oninput=e=>{
+  $("pctVal").textContent=e.target.value;
+  const pct=+e.target.value, ncell=S.gridR*S.gridC;
+  // cells above the pth percentile: at most ceil(ncell*(100-p)/100), ties aside
+  const maxT=Math.max(1,Math.ceil(ncell*(100-pct)/100));
+  $("pctInfo").textContent=`top ${100-pct}% → up to ${maxT} of ${ncell} tiles into Stage B`;
+};
+
+// ---- browse (native OS dialog via backend) ----
+$("btnBrowse").onclick=async()=>{
+  $("importStatus").innerHTML='<span class="spinner"></span>opening file dialog…';
+  try{
+    const r=await API("browse",{});
+    if(r.path){$("slidePath").value=r.path;$("importStatus").textContent="✓ selected";}
+    else{$("importStatus").textContent="no file chosen";}
+  }catch(e){$("importStatus").textContent="✕ "+e.message+" — paste a path instead";}
+};
+
+// ---- import ----
+$("btnImport").onclick=async()=>{
+  const path=$("slidePath").value.trim();
+  if(!path){$("importStatus").textContent="enter a slide path";return;}
+  $("importStatus").innerHTML='<span class="spinner"></span>building thumbnail…';
+  $("btnImport").disabled=true;
+  try{
+    const r=await API("import",{slide_path:path});
+    S.session=r.session_id;S.thumb=r.thumbnail;S.thumbSize=r.thumbnail_size;
+    S.thumbW=r.thumbnail_w||r.thumbnail_size;S.thumbH=r.thumbnail_h||r.thumbnail_size;
+    S.wsiDim=r.wsi_level0_dim||null;
+    S.selected=[];S.risk=null;S.lastRun=null;
+    $("importStatus").innerHTML=`✓ ${r.slide_id} · tissue ${(r.tissue_fraction*100).toFixed(0)}% · ${r.elapsed_sec}s`
+      +`<br><span style="color:var(--mut)">saves to ${r.gs_dir.split(/[\\/]/).pop()} on Save</span>`;
+    $("btnRun").disabled=false;$("btnSave").disabled=true;$("btnReplay").disabled=true;
+    drawInitial();
+  }catch(e){$("importStatus").textContent="✕ "+e.message;}
+  $("btnImport").disabled=false;
+};
+
+// ---- layout coordinates on the 1200x800 canvas ----
+const L={
+  thumb:{x:30,y:70,s:360},
+  wsiMap:{x:430,y:70,w:150},              // WSI-aspect overview, centre column
+  patchArea:{x:640,y:60,w:300,h:690},     // patches laid out adaptively here
+  stageB:{x:960,y:370,w:210,h:80},
+};
+
+// choose a grid (cols x rows) and patch size so n patches fit patchArea
+function patchLayout(n){
+  const A=L.patchArea;
+  let cols=1;
+  if(n<=2)cols=1; else if(n<=6)cols=2; else if(n<=12)cols=3; else cols=4;
+  const rows=Math.ceil(n/cols);
+  const gap=10;
+  const s=Math.min((A.w-(cols-1)*gap)/cols, (A.h-(rows-1)*gap)/rows);
+  const positions=[];
+  for(let i=0;i<n;i++){
+    const c=i%cols, r=Math.floor(i/cols);
+    positions.push({x:A.x+c*(s+gap), y:A.y+r*(s+gap), s});
+  }
+  return {positions,s,cols,rows};
+}
+
+function drawInitial(){
+  const svg=$("stage");svg.innerHTML="";
+  // thumbnail
+  const g=el("g");svg.appendChild(g);
+  const img=el("image",{href:S.thumb,x:L.thumb.x,y:L.thumb.y,
+    width:L.thumb.s,height:L.thumb.s,rx:8});
+  img.setAttribute("opacity","0");g.appendChild(img);
+  img.animate([{opacity:0},{opacity:1}],{duration:500,fill:"forwards"});
+  label(svg,L.thumb.x,L.thumb.y-12,`Thumbnail (${S.thumbW}×${S.thumbH} px, 4.0 µm/px)`);
+  $("dxText").textContent="—";$("dxConf").textContent="";
+}
+function label(svg,x,y,t,color="#8b949e"){
+  const e=el("text",{x,y,fill:color,"font-size":13,"font-weight":600});
+  e.textContent=t;svg.appendChild(e);return e;}
+
+// ---- run full pipeline with animation ----
+$("btnRun").onclick=()=>runPipeline(true);
+$("btnReplay").onclick=()=>{if(S.lastRun)animateFrom(S.lastRun);};
+
+async function runPipeline(animate){
+  if(!S.session)return;
+  const st=$("runStatus");
+  $("btnRun").disabled=true;
+  const pct=+$("pct").value;
+  const cfg={archA:S.archA,archB:S.archB,pct};
+  const prev=S.lastCfg;
+  const archAchanged = !prev || prev.archA!==cfg.archA;
+  const archBchanged = !prev || prev.archB!==cfg.archB;
+  const pctChanged   = !prev || prev.pct!==cfg.pct;
+  try{
+    // Stage A + risk map: recompute only if the Stage A model changed.
+    // (backend reuses the cached risk map when archA is unchanged, so this is
+    //  cheap even when we call it; selection re-thresholds on the new percentile.)
+    let A=S.lastRun&&!archAchanged?S.lastRun.A:null;
+    if(!A){st.innerHTML='<span class="spinner"></span>Stage A grade…';
+      A=await API("stage_a",{session_id:S.session,arch:S.archA});}
+    st.innerHTML='<span class="spinner"></span>Stage A signal map…';
+    const R=await API("risk_map",{session_id:S.session,percentile:pct,cap:0});
+    S.selected=R.selected;S.risk=R;S.gridR=R.grid_rows||8;S.gridC=R.grid_cols||8;
+
+    // Extract patches: reuse any already extracted this session (backend caches
+    // by row/col); only new tiles cost a WSI read. If archA changed the
+    // selection may differ, so we key reuse on (row,col).
+    const prevPatches={};
+    if(S.lastRun&&!archAchanged) for(const p of S.lastRun.patches) prevPatches[p.row+"_"+p.col]=p;
+    const patches=[];
+    for(const sel of R.selected){
+      const key=sel.row+"_"+sel.col;
+      if(prevPatches[key]){patches.push(prevPatches[key]);continue;}
+      st.innerHTML=`<span class="spinner"></span>extracting r${sel.row}c${sel.col}…`;
+      const E=await API("extract",{session_id:S.session,row:sel.row,col:sel.col});
+      patches.push({...sel,...E});
+    }
+
+    // Stage B: re-run if archB changed OR the tile set changed; else reuse.
+    let B;
+    const tilesChanged = !S.lastRun || S.lastRun.patches.length!==patches.length ||
+      patches.some((p,i)=>!S.lastRun.patches[i]||S.lastRun.patches[i].row!==p.row||S.lastRun.patches[i].col!==p.col);
+    if(!archBchanged && !tilesChanged && S.lastRun){B=S.lastRun.B;}
+    else{st.innerHTML='<span class="spinner"></span>Stage B molecular…';
+      B=await API("stage_b",{session_id:S.session,arch:S.archB});}
+
+    // Occlusion: only for tiles that need it, reuse the rest.
+    let occl={};
+    if(S.occl){
+      const prevOccl=(!archBchanged&&S.lastRun)?S.lastRun.occl:{};
+      for(const sel of R.selected){
+        const key=sel.row+"_"+sel.col;
+        if(prevOccl[key]){occl[key]=prevOccl[key];continue;}
+        st.innerHTML=`<span class="spinner"></span>occlusion r${sel.row}c${sel.col}…`;
+        occl[key]=await API("stage_b_occlusion",
+          {session_id:S.session,row:sel.row,col:sel.col,arch:S.archB});
+      }
+    }
+    const I=await API("integrate",{session_id:S.session,arch:S.archB});
+    S.lastRun={A,R,patches,B,occl,I};S.lastCfg=cfg;
+    st.textContent="✓ complete";
+    $("btnSave").disabled=false;$("btnReplay").disabled=false;
+    if(animate)await animateFrom(S.lastRun); else renderStatic();
+  }catch(e){st.textContent="✕ "+e.message;}
+  $("btnRun").disabled=false;
+}
+
+// ---- probability bars helper (SVG) ----
+function probBars(svg,x,y,probs,colors,w=150){
+  const keys=Object.keys(probs);const bh=14,gap=4;
+  keys.forEach((k,i)=>{
+    const yy=y+i*(bh+gap);
+    svg.appendChild(el("rect",{x,y:yy,width:w,height:bh,rx:4,fill:"#1c232d"}));
+    const fill=el("rect",{x,y:yy,width:0,height:bh,rx:4,fill:colors[k]||"#3b82f6",
+      stroke:"#0e1117","stroke-opacity":.2,"stroke-width":.5});
+    svg.appendChild(fill);
+    fill.animate([{width:0},{width:w*probs[k]}],{duration:INSTANT?0:600,fill:"forwards",delay:INSTANT?0:i*80});
+    fill.setAttribute("width",w*probs[k]);
+    const nm=el("text",{x:x+4,y:yy+11,fill:"#e6edf3","font-size":10,"font-weight":600,
+      "paint-order":"stroke",stroke:"#0e1117","stroke-width":2.2,"stroke-linejoin":"round"});
+    nm.textContent=k.replace("IDH_","").replace("_"," ");svg.appendChild(nm);
+    if(S.raw){const pc=el("text",{x:x+w-4,y:yy+11,fill:"#e6edf3","font-size":10,
+      "text-anchor":"end","font-variant-numeric":"tabular-nums",
+      "paint-order":"stroke",stroke:"#0e1117","stroke-width":2.2,"stroke-linejoin":"round"});
+      pc.textContent=probs[k].toFixed(2);svg.appendChild(pc);}
+  });
+  return y+keys.length*(bh+gap);
+}
+
+function tileRect(sel,color,cls=""){
+  const cw=L.thumb.s/S.gridC, ch=L.thumb.s/S.gridR;
+  return el("rect",{x:L.thumb.x+sel.col*cw,y:L.thumb.y+sel.row*ch,
+    width:cw,height:ch,fill:"none",stroke:color,"stroke-width":3,rx:3,class:cls});
+}
+
+// ---- full animation ----
+async function animateFrom(run){
+  const svg=$("stage");svg.innerHTML="";
+  // 1. thumbnail
+  svg.appendChild(el("image",{href:S.thumb,x:L.thumb.x,y:L.thumb.y,
+    width:L.thumb.s,height:L.thumb.s}));
+  label(svg,L.thumb.x,L.thumb.y-12,`Thumbnail · ${S.thumbW}×${S.thumbH} px · 4.0 µm/px`);
+  // 2. grade prediction card
+  const gclass=run.A.grade_pred;
+  if(S.pred){
+    const gx=L.thumb.x, gy=L.thumb.y+L.thumb.s+22;
+    const g=el("g");g.setAttribute("opacity",INSTANT?"1":"0");svg.appendChild(g);
+    g.appendChild(el("rect",{x:gx,y:gy,width:200,height:26,rx:13,fill:COL[gclass]||"#64748b",
+      stroke:"#0e1117",'stroke-opacity':.15,'stroke-width':1}));
+    const t=el("text",{x:gx+100,y:gy+17,fill:INK[gclass]||"#fff","font-size":12,"font-weight":700,
+      "text-anchor":"middle"});t.textContent="Stage A: "+gclass.replace("_"," ");
+    g.appendChild(t);
+    if(S.raw){const c=el("text",{x:gx+210,y:gy+17,fill:"#8b949e","font-size":11});
+      c.textContent="conf "+run.A.confidence.toFixed(2);g.appendChild(c);}
+    if(!INSTANT)g.animate([{opacity:0},{opacity:1}],{duration:400,fill:"forwards"});
+  }
+  await sleep(400);
+  // 3. signal map overlay (heat cells) + highlight selected
+  if(S.signal){
+    const cw=L.thumb.s/S.gridC, ch=L.thumb.s/S.gridR;
+    for(let r=0;r<S.gridR;r++)for(let c=0;c<S.gridC;c++){
+      const v=run.R.risk_grid[r][c];
+      const rect=el("rect",{x:L.thumb.x+c*cw,y:L.thumb.y+r*ch,width:cw,height:ch,
+        fill:heat(v)});
+      svg.appendChild(rect);
+      fadeIn(rect,0.45,{duration:500,delay:INSTANT?0:(r*S.gridC+c)*4});
+    }
+    label(svg,L.thumb.x,L.thumb.y+L.thumb.s+ (S.pred?70:22),
+      `Stage A signal map · patch-injection · ${ARCH_LABEL[S.archA]}`);
+    await sleep(700);
+  }
+  // 4. highlight selected tiles, sequential
+  for(const sel of run.selected||run.R.selected){
+    const rr=tileRect(sel,"#e11d1d");svg.appendChild(rr);
+    fadeIn(rr,1,{duration:250});
+    if(!INSTANT)await sleep(120);
+  }
+  await sleep(200);
+  // 5. per-patch: line from tile -> high-res patch -> into Stage B
+  const lay=patchLayout(run.patches.length);
+  run.patches.forEach((p,i)=>{
+    const pos=lay.positions[i];
+    p._px=pos.x; p._py=pos.y; p._ps=pos.s;
+  });
+  label(svg,L.patchArea.x,L.patchArea.y-14,
+    `High-resolution patches (level-0 region → resampled to 2048²), n=${run.patches.length}`);
+  // Central WSI overview: a rectangle at the true level-0 aspect ratio, placed
+  // between thumbnail and patches. Red connectors run thumbnail tile → its
+  // location on the WSI; blue connectors run each WSI location → its resampled
+  // high-res patch. This makes the coordinate transform explicit.
+  const wsi=S.wsiDim||run.R.wsi_level0_dim||(run.patches[0]&&run.patches[0].wsi_level0_dim);
+  let mini=null;
+  if(wsi&&run.patches.length){
+    const aspect=wsi[1]/wsi[0];
+    const mw=L.wsiMap.w, mh=Math.round(mw*aspect);
+    const mx=L.wsiMap.x, my=L.wsiMap.y+Math.max(0,(L.thumb.s-mh)/2);
+    mini={x:mx,y:my,w:mw,h:mh,W:wsi[0],H:wsi[1]};
+    const mg=el("g");mg.setAttribute("opacity",INSTANT?"1":"0");svg.appendChild(mg);
+    mg.appendChild(el("rect",{x:mx,y:my,width:mw,height:mh,rx:4,fill:"#0b0e13",
+      stroke:"#2a323d","stroke-width":1.5}));
+    mg.appendChild(el("image",{href:S.thumb,x:mx,y:my,width:mw,height:mh,rx:4,opacity:.35}));
+    const ml=el("text",{x:mx+mw/2,y:my-8,fill:"#8b949e","font-size":9,"text-anchor":"middle"});
+    ml.textContent="WSI level 0";mg.appendChild(ml);
+    const ml2=el("text",{x:mx+mw/2,y:my+mh+13,fill:"#6b7686","font-size":8,"text-anchor":"middle"});
+    ml2.textContent=`${wsi[0]}×${wsi[1]} px`;mg.appendChild(ml2);
+    if(!INSTANT)mg.animate([{opacity:0},{opacity:1}],{duration:300,fill:"forwards"});
+    if(!INSTANT)await sleep(200);
+  }
+  const cw=L.thumb.s/S.gridC, ch=L.thumb.s/S.gridR;
+  for(let i=0;i<run.patches.length;i++){
+    const p=run.patches[i];const ps=p._ps;
+    const from={x:L.thumb.x+p.col*cw+cw/2,y:L.thumb.y+p.row*ch+ch/2};
+    // red block on WSI map + red connector thumbnail→WSI
+    let wsiCentre=null;
+    if(mini&&p.wsi_bbox){
+      const [wx,wy,ww,wh]=p.wsi_bbox;
+      const rx=mini.x+wx/mini.W*mini.w, ry=mini.y+wy/mini.H*mini.h;
+      const rw=Math.max(3,ww/mini.W*mini.w), rh=Math.max(3,wh/mini.H*mini.h);
+      wsiCentre={x:rx+rw/2,y:ry+rh/2, right:rx+rw};
+      const box=el("rect",{x:rx,y:ry,width:rw,height:rh,fill:"#e11d1d",
+        "fill-opacity":.35,stroke:"#e11d1d","stroke-width":1.5});
+      svg.appendChild(box);
+      fadeIn(box,1,{duration:250});
+      const rconn=el("path",{d:`M${from.x},${from.y} C${from.x+80},${from.y} ${wsiCentre.x-70},${wsiCentre.y} ${wsiCentre.x},${wsiCentre.y}`,
+        fill:"none",stroke:"#e11d1d","stroke-width":1.3,"stroke-dasharray":"4 3"});
+      svg.appendChild(rconn);
+      if(INSTANT)rconn.setAttribute("opacity",".3");
+      else{rconn.animate([{opacity:0},{opacity:.8}],{duration:300,fill:"forwards"});
+        rconn.animate([{opacity:.8},{opacity:.3}],{duration:600,delay:400,fill:"forwards"});}
+      if(!INSTANT)await sleep(run.patches.length>6?70:180);
+    }
+    const to={x:p._px,y:p._py+ps/2};
+    // blue connector: starts from this tile's WSI block (right edge) and flows
+    // to its resampled high-res patch. Red = thumbnail→WSI, blue = WSI→patch.
+    const src=wsiCentre?{x:wsiCentre.right,y:wsiCentre.y}:{x:mini?mini.x+mini.w:from.x,y:from.y};
+    const d=`M${src.x},${src.y} C${src.x+70},${src.y} ${to.x-70},${to.y} ${to.x},${to.y}`;
+    const path=el("path",{d,fill:"none",stroke:"#3b82f6","stroke-width":1.5,opacity:.75});
+    svg.appendChild(path);
+    const len=path.getTotalLength();
+    path.style.strokeDasharray=len;
+    if(INSTANT){path.style.strokeDashoffset=0;path.setAttribute("opacity",".3");}
+    else{path.style.strokeDashoffset=len;
+      path.animate([{strokeDashoffset:len},{strokeDashoffset:0}],{duration:500,fill:"forwards"});
+      path.animate([{opacity:.75},{opacity:.3}],{duration:700,delay:500,fill:"forwards"});}
+    if(!INSTANT)await sleep(run.patches.length>6?100:280);
+    // high-res patch appears
+    const g=el("g");g.setAttribute("opacity",INSTANT?"1":"0");g.style.cursor="pointer";svg.appendChild(g);
+    g.appendChild(el("image",{href:p.patch,x:p._px,y:p._py,width:ps,height:ps,rx:5}));
+    g.appendChild(el("rect",{x:p._px,y:p._py,width:ps,height:ps,rx:5,fill:"none",
+      stroke:"#3b82f6","stroke-width":1.6}));
+    // click to inspect this patch in a full overlay
+    g.addEventListener("click",()=>{
+      const occNow=S.lastRun&&S.lastRun.occl?S.lastRun.occl[p.row+"_"+p.col]:null;
+      openInspect(p,(S.lastRun&&S.lastRun.B)||run.B,occNow);
+    });
+    if(!INSTANT)g.animate([{opacity:0},{opacity:1}],{duration:350,fill:"forwards"});
+    if(!INSTANT)await sleep(run.patches.length>6?80:220);
+    // occlusion overlay if on
+    if(S.occl&&run.occl[p.row+"_"+p.col]){
+      const occ=run.occl[p.row+"_"+p.col];
+      const og=occ.grid?occ.grid[0]:8;      // occlusion grid from backend
+      const cellp=ps/og;
+      for(let r=0;r<og;r++)for(let c=0;c<og;c++){
+        const v=occ.importance_grid[r][c];
+        const rect=el("rect",{x:p._px+c*cellp,y:p._py+r*cellp,width:cellp,height:cellp,
+          fill:heat(v),opacity:INSTANT?0.5:0});g.appendChild(rect);
+        if(!INSTANT)rect.animate([{opacity:0},{opacity:.5}],{duration:300,fill:"forwards",delay:(r*og+c)*2});
+      }
+      // outline the top-1 occlusion cell and show the level-0 cellular zoom inset
+      if(occ.top_cell){
+        const [tr,tc]=occ.top_cell;
+        g.appendChild(el("rect",{x:p._px+tc*cellp,y:p._py+tr*cellp,width:cellp,height:cellp,
+          fill:"none",stroke:"#fde047","stroke-width":2}));
+        if(occ.top_zoom){
+          const zs=ps*0.42;                     // zoom inset size
+          const zx=p._px+ps-zs-3, zy=p._py+ps-zs-3;  // bottom-right corner
+          // connector from the top cell to the inset
+          const cx=p._px+tc*cellp+cellp/2, cy=p._py+tr*cellp+cellp/2;
+          g.appendChild(el("path",{d:`M${cx},${cy} L${zx+zs/2},${zy+zs/2}`,
+            stroke:"#fde047","stroke-width":1,"stroke-dasharray":"3 3",opacity:.8,fill:"none"}));
+          g.appendChild(el("image",{href:occ.top_zoom,x:zx,y:zy,width:zs,height:zs}));
+          g.appendChild(el("rect",{x:zx,y:zy,width:zs,height:zs,fill:"none",
+            stroke:"#fde047","stroke-width":2}));
+          if(S.raw){const zl=el("text",{x:zx+2,y:zy-3,fill:"#fde047","font-size":8,
+            "font-weight":600});zl.textContent=`top1 r${tr}c${tc} · lvl0 zoom`;g.appendChild(zl);}
+        }
+      }
+    }
+  }
+  await sleep(300);
+  // 6. Stage B box + flow lines from patches into it
+  const sb=L.stageB;
+  const box=el("g");box.setAttribute("opacity",INSTANT?"1":"0");svg.appendChild(box);
+  box.appendChild(el("rect",{x:sb.x,y:sb.y,width:sb.w,height:sb.h,rx:10,
+    fill:"#1c232d",stroke:"#6366f1","stroke-width":2}));
+  // centered two-line label, proper ResNet casing (#5)
+  const bt1=el("text",{x:sb.x+sb.w/2,y:sb.y+sb.h/2-4,fill:"#e6edf3","font-size":14,
+    "font-weight":700,"text-anchor":"middle","dominant-baseline":"middle"});
+  bt1.textContent="Stage B";box.appendChild(bt1);
+  const bt2=el("text",{x:sb.x+sb.w/2,y:sb.y+sb.h/2+15,fill:"#8b949e","font-size":12,
+    "text-anchor":"middle","dominant-baseline":"middle"});
+  bt2.textContent=ARCH_LABEL[S.archB];box.appendChild(bt2);
+  // how many tiles fed Stage B, percentile-only (all tiles above threshold)
+  const nsel=run.R.n_selected!=null?run.R.n_selected:run.patches.length;
+  const ncell=(run.R.grid_rows||8)*(run.R.grid_cols||8);
+  const cnt=el("text",{x:sb.x+sb.w/2,y:sb.y+sb.h+16,fill:"#8b949e","font-size":10,
+    "text-anchor":"middle"});
+  cnt.textContent=`${nsel} tile${nsel===1?"":"s"} (p${run.R.percentile} of ${ncell}) → soft vote`;
+  box.appendChild(cnt);
+  if(+run.R.percentile!==95){
+    const dn=el("text",{x:sb.x+sb.w/2,y:sb.y+sb.h+28,fill:"#6b7686","font-size":8.5,
+      "text-anchor":"middle"});
+    dn.textContent="deployed pipeline uses p95";box.appendChild(dn);
+  }
+  if(!INSTANT)box.animate([{opacity:0},{opacity:1}],{duration:400,fill:"forwards"});
+  for(const p of run.patches){
+    const from={x:p._px+p._ps,y:p._py+p._ps/2};
+    const to={x:sb.x,y:sb.y+sb.h/2};
+    const path=el("path",{d:`M${from.x},${from.y} C${from.x+60},${from.y} ${to.x-60},${to.y} ${to.x},${to.y}`,
+      fill:"none",stroke:"#6366f1","stroke-width":1.6,opacity:.6});
+    svg.appendChild(path);
+    const len=path.getTotalLength();path.style.strokeDasharray=len;
+    if(INSTANT)path.style.strokeDashoffset=0;
+    else{path.style.strokeDashoffset=len;
+      path.animate([{strokeDashoffset:len},{strokeDashoffset:0}],{duration:450,fill:"forwards"});}
+  }
+  if(!INSTANT)await sleep(500);
+  // 7. Stage B prediction bars + subtype pill
+  if(S.pred){
+    const by=sb.y+sb.h+34;
+    label(svg,sb.x,by-4,"Molecular prediction");
+    probBars(svg,sb.x,by+6,run.B.slide_probs,COL,sb.w);
+    const sub=run.B.subtype_pred;
+    const py=by+6+3*18+8;
+    svg.appendChild(el("rect",{x:sb.x,y:py,width:sb.w,height:26,rx:13,fill:COL[sub],
+      stroke:"#0e1117",'stroke-opacity':.15,'stroke-width':1}));
+    const pt=el("text",{x:sb.x+sb.w/2,y:py+17,fill:INK[sub]||"#fff","font-size":12,"font-weight":700,
+      "text-anchor":"middle"});pt.textContent=sub.replace("IDH_","IDH-").replace("_"," ");
+    svg.appendChild(pt);
+    if(S.raw){const c=el("text",{x:sb.x,y:py+44,fill:"#8b949e","font-size":11});
+      c.textContent="confidence "+run.B.confidence.toFixed(2);svg.appendChild(c);}
+  }
+  await sleep(400);
+  // 8. integrated diagnosis
+  $("dxText").textContent=run.I.integrated_diagnosis;
+  $("dxText").animate([{opacity:0,transform:"translateY(8px)"},{opacity:1,transform:"translateY(0)"}],
+    {duration:500,fill:"forwards"});
+  $("dxConf").textContent=S.raw?("integrated confidence "+run.I.integrated_confidence.toFixed(2)):"";
+}
+
+// display-only toggles: re-render the last run instantly (INSTANT skips the
+// timed sleeps, so the pipeline redraws in one frame with the new options).
+function renderStatic(){
+  if(!S.lastRun)return;
+  INSTANT=true;
+  animateFrom(S.lastRun).finally(()=>{INSTANT=false;});
+}
+
+function heat(v){ // 0..1 -> blue->yellow->red (RdYlBu_r-ish)
+  v=Math.max(0,Math.min(1,v));
+  const stops=[[59,76,192],[144,178,214],[247,247,247],[244,165,130],[178,24,43]];
+  const t=v*(stops.length-1);const i=Math.floor(t);const f=t-i;
+  const a=stops[i],b=stops[Math.min(i+1,stops.length-1)];
+  const c=a.map((x,k)=>Math.round(x+(b[k]-x)*f));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
+// ---- click-to-inspect overlay ----
+function htmlBars(container,probs,colors){
+  container.innerHTML="";
+  Object.keys(probs).forEach(k=>{
+    const row=document.createElement("div");row.className="bar";
+    const nm=document.createElement("div");nm.className="name";
+    nm.textContent=k.replace("IDH_","").replace("_"," ");
+    const track=document.createElement("div");track.className="track";
+    const fill=document.createElement("div");fill.className="fill";
+    fill.style.background=colors[k]||"#3b82f6";fill.style.width="0%";
+    const pct=document.createElement("div");pct.className="pct";pct.textContent=probs[k].toFixed(2);
+    track.appendChild(fill);row.append(nm,track,pct);container.appendChild(row);
+    requestAnimationFrame(()=>{fill.style.width=(probs[k]*100)+"%";});
+  });
+}
+function openInspect(p,B,occ){
+  const D=380;
+  $("inspImg").setAttribute("href",p.patch);
+  const og=$("inspOccl");og.innerHTML="";
+  $("inspTitle").textContent=`Patch r${p.row}c${p.col}`;
+  // per-patch probs if available, else slide-level
+  const pp=(B.per_patch||[]).find(x=>x.row===p.row&&x.col===p.col);
+  const probs=pp?pp.probs:B.slide_probs;
+  const call=pp?pp.pred:B.subtype_pred;
+  const conf=pp?pp.confidence:B.confidence;
+  $("inspMeta").innerHTML=
+    `<div><span class="k">Risk R:</span> ${p.risk!=null?p.risk.toFixed(2):"—"}</div>`+
+    `<div><span class="k">Tissue:</span> ${p.tissue!=null?p.tissue.toFixed(2):"—"}</div>`+
+    (p.wsi_bbox?`<div><span class="k">Level-0 region:</span> ${p.wsi_bbox[2]}×${p.wsi_bbox[3]} px</div>`:"")+
+    `<div><span class="k">Stage B call:</span> <b>${call.replace("IDH_","IDH-").replace("_"," ")}</b> · conf ${conf.toFixed(2)}</div>`;
+  htmlBars($("inspBars"),probs,COL);
+  // occlusion overlay: shown only when the toggle is on AND data exists,
+  // mirroring exactly what the small patch shows.
+  const showOcc=S.occl&&occ&&occ.importance_grid;
+  if(showOcc){
+    const grid=occ.grid?occ.grid[0]:8;const cell=D/grid;
+    for(let r=0;r<grid;r++)for(let c=0;c<grid;c++){
+      og.appendChild(el("rect",{x:c*cell,y:r*cell,width:cell,height:cell,
+        fill:heat(occ.importance_grid[r][c]),opacity:.5}));
+    }
+    if(occ.top_cell){
+      const [tr,tc]=occ.top_cell;
+      og.appendChild(el("rect",{x:tc*cell,y:tr*cell,width:cell,height:cell,
+        fill:"none",stroke:"#fde047","stroke-width":3}));
+    }
+  }
+  // level-0 zoom inset: show when occlusion is on and a zoom exists
+  if(showOcc&&occ.top_zoom){
+    $("inspZoomWrap").classList.remove("hidden");
+    $("inspZoom").src=occ.top_zoom;
+  }else{$("inspZoomWrap").classList.add("hidden");}
+  $("inspect").classList.remove("hidden");
+}
+function closeInspect(){$("inspect").classList.add("hidden");}
+document.addEventListener("keydown",e=>{if(e.key==="Escape")closeInspect();});
+
+// ---- load previous result ----
+$("btnLoad").onclick=async()=>{
+  $("loadStatus").innerHTML='<span class="spinner"></span>choosing folder…';
+  let folder="";
+  try{const b=await API("browse_folder",{});folder=b.folder;}catch(e){
+    folder=prompt("Path to a GS_ analysis folder:")||"";}
+  if(!folder){$("loadStatus").textContent="cancelled";return;}
+  $("loadStatus").innerHTML='<span class="spinner"></span>loading…';
+  try{
+    const d=await API("load",{folder});
+    // reconstruct the run shape the animation expects
+    S.thumb=d.thumbnail;S.thumbW=d.thumbnail_w;S.thumbH=d.thumbnail_h;
+    S.wsiDim=d.wsi_level0_dim;S.gridR=d.grid[0];S.gridC=d.grid[1];
+    S.session=null;                      // loaded, not a live session
+    const run={
+      A:{grade_pred:d.stage_a?.grade_pred||"",confidence:d.stage_a?.confidence||0},
+      R:{risk_grid:d.risk_grid,selected:d.selected,percentile:95,
+         grid_rows:d.grid[0],grid_cols:d.grid[1],n_selected:d.patches.length,
+         wsi_level0_dim:d.wsi_level0_dim},
+      patches:d.patches.map(p=>({row:p.row,col:p.col,risk:p.risk,tissue:p.tissue,
+        wsi_bbox:p.wsi_bbox,patch:p.patch})),
+      B:{slide_probs:{IDH_mt:d.stage_b?.prob_IDH_mt||0,
+         IDH_mt_1p19q:d.stage_b?.prob_IDH_mt_1p19q||0,IDH_wt:d.stage_b?.prob_IDH_wt||0},
+         subtype_pred:d.stage_b?.subtype_pred||"",confidence:d.stage_b?.confidence||0,
+         per_patch:[]},
+      occl:{},
+      I:{integrated_diagnosis:d.integrated?.diagnosis||"—",
+         integrated_confidence:d.integrated?.confidence||0},
+    };
+    S.lastRun=run;S.selected=d.selected;
+    $("btnSave").disabled=true;$("btnReplay").disabled=false;
+    $("loadStatus").innerHTML=`✓ loaded ${d.slide_id}<br>`+
+      `<span style="color:var(--mut)">${d.folder.split(/[\\/]/).pop()}</span>`;
+    await animateFrom(run);
+  }catch(e){$("loadStatus").textContent="✕ "+e.message;}
+};
+
+// ---- save ----
+$("btnSave").onclick=async()=>{
+  $("saveStatus").innerHTML='<span class="spinner"></span>writing report & figures…';
+  try{const r=await API("save",{session_id:S.session});
+    $("saveStatus").innerHTML=`✓ saved ${r.saved.length} files<br>`
+      +`<span style="color:var(--mut)">${r.report.split(/[\\/]/).pop()}</span>`;
+  }catch(e){$("saveStatus").textContent="✕ "+e.message;}
+};
+</script>
+</body>
+</html>

@@ -20,10 +20,11 @@ The design keeps compute low while preserving diagnostic signal, so the whole pi
 6. [Threshold Tuning (Stage A)](#6-threshold-tuning-stage-a)
 7. [Patch Injection and the Stage B Cohort](#7-patch-injection-and-the-stage-b-cohort)
 8. [Stage B Training](#8-stage-b-training)
-9. [Aggregating Results Across Folds](#9-aggregating-results-across-folds)
-10. [Ablations](#10-ablations)
-11. [Outputs](#11-outputs)
-12. [Notes and Next Steps](#12-notes-and-next-steps)
+9. [End-to-End Inference](#9-end-to-end-inference)
+10. [Aggregating Results Across Folds](#10-aggregating-results-across-folds)
+11. [Ablations](#11-ablations)
+12. [Outputs](#12-outputs)
+13. [Notes and Next Steps](#13-notes-and-next-steps)
 
 ---
 
@@ -78,6 +79,7 @@ data/
   ebrains_thumbnails/           thumbnails + JSON sidecars, per subtype/included
   stage_b_cohort/               generated Stage B patches + manifests
 splits/                         the 5 frozen cross-validation split CSVs
+results/                        end-to-end inference outputs, per run and slide
 
 scripts/
   lib/
@@ -97,6 +99,8 @@ scripts/
     build_stageB_cohort.py      per-fold p95 patch extraction + manifests
     stageB_dataset.py           resolve train/val/test per fold from the manifest
     train_stageB.py             Stage B training (one fold per run)
+  inference/
+    inference_end_to_end.py     Stage A + Stage B end-to-end (single/folder/testset)
   demo/
     injection_demo.py           explainer figure of the injection mechanism
 
@@ -253,6 +257,8 @@ risk_map[r, c] = score_injected(class p) - score_baseline(class p)
 
 The score is the **class logit** by default (`score="logit"`). On a confident model the softmax saturates, so a single injected tile barely moves the probability and the map collapses to zero; the logit keeps the contrast. The control is shuffled once with a fixed seed (42), so its own tile arrangement carries no positional information. Because Stage A is trained with patch permutation, the model is position-invariant, so R reflects tile content rather than location.
 
+In the manuscript the injection uses a single **fixed control site** `s`, identical for every injection, so the displaced control tile is held constant and R depends only on the injected tile's content. The value R is stored at the target tile's own coordinate `(r,c)`, keeping the map aligned with the slide. The fixed-site and same-position variants agree closely (Section 11), and the equation is written R = z_p(C[s <- T_{r,c}]) - z_p(C), with z_p the pre-softmax logit for class p.
+
 ### 7.2 Coordinate mapping
 
 `glioma_sparse.interpret.wsi_mapping` inverts the three preprocessing transforms (resample to target MPP, pad to square, resize to thumbnail) using the sidecar, so a thumbnail tile maps exactly to a WSI level-0 region. Tiles overlapping padding are clipped; tiles entirely in padding return `None`.
@@ -338,7 +344,70 @@ Quadratic weighted kappa appears in the metrics because the shared metric functi
 
 ---
 
-## 9. AGGREGATING RESULTS ACROSS FOLDS
+## 9. END-TO-END INFERENCE
+
+`scripts/inference/inference_end_to_end.py` runs the full pipeline on new material: thumbnail generation, Stage A grading with a risk map, high-resolution region extraction, Stage B molecular subtyping, and an integrated WHO 2021 diagnosis. It has three modes and can be driven either from the command line or from a `CONFIG` block at the top of the file, so it runs straight from a PyCharm Run button while keeping the flags available for others.
+
+### 9.1 What it does per slide
+
+For each slide the script generates a 2048x2048 thumbnail and its JSON sidecar, predicts the grade with Stage A, builds the logit risk map, and selects the strongest-signal regions at the p95 rule (configurable with `--percentile`, for example 90 or 97). Each region is re-extracted from the WSI at high resolution and passed through Stage B, and the patch probabilities are soft-voted to a slide-level subtype. The grade class and subtype combine into an integrated WHO 2021 diagnosis. Each prediction carries a confidence, defined as one minus the normalised entropy of the probability vector, and the integrated diagnosis carries its own confidence, the product of the Stage A and Stage B confidences.
+
+### 9.2 Modes
+
+Single slide or a folder of WSIs (`.ndpi`, `.svs`, `.mrxs`), using one Stage A and one Stage B checkpoint:
+
+```
+python -m scripts.inference.inference_end_to_end \
+    --input path/to/slide.ndpi \
+    --stage-a-ckpt training_output/<fold>/best_auc.pth \
+    --stage-b-ckpt training_output_stageB/<fold>/best_auc.pth \
+    --wsi-root path/to/WHO2021_data \
+    --control-image data/included/control/<control_id>.jpg \
+    --run-name e2e_single [--percentile 95] [--stage-b-riskmap]
+```
+
+Testset mode runs each fold's held-out test slides through that fold's own Stage A and Stage B models, which keeps the evaluation leakage-free in the same way the cohort build is. It reads the test slides directly from each `split_0X.csv` and pairs checkpoints to folds by the tokens `split_0X` and `foldX` in their paths:
+
+```
+python -m scripts.inference.inference_end_to_end --testset \
+    --splits-dir splits \
+    --stage-a-glob "training_output/*_split_0*/best_auc.pth" \
+    --stage-b-glob "training_output_stageB/*_fold*/best_auc.pth" \
+    --sidecar-root data/ebrains_thumbnails \
+    --wsi-root path/to/WHO2021_data --run-name e2e_testset
+```
+
+Relative paths in `CONFIG` are anchored to the repository root, so the script works whether it is launched as a module or as a plain file with any working directory. Command-line flags override `CONFIG`.
+
+### 9.3 Fair control handling (testset)
+
+Controls are not part of the molecular problem and were never seen by Stage B, so they are scored fairly. A control predicted as control stops after Stage A and counts as correct end-to-end, without entering Stage B. A control predicted as tumour counts as a Stage A error, while its Stage B call is excluded from the subtype metrics. Controls are left out of the subtype accuracy entirely.
+
+### 9.4 Metrics
+
+The testset report gives, per fold and aggregated across folds with mean ± std: grade accuracy over all slides, subtype accuracy over the tumour slides, a wildtype-versus-mutant accuracy that collapses IDH_mt and IDH_mt_1p19q into one mutant group (so an astrocytoma called oligodendroglioma still counts as a correct mutant call), and end-to-end accuracy with the fair control rule. A separate 1p/19q codeletion table reports, for the true IDH-mutant slides, the sensitivity for codeleted (oligodendroglioma) and non-codeleted (astrocytoma) cases, plus the codeletion accuracy within the cases actually called mutant.
+
+### 9.5 Outputs
+
+Everything is written under `results/<run-name>/<slide-abbrev>/`, with `fold_<k>/` between them in testset mode. Each slide folder holds a `riskmap/` and a `patches/` subfolder:
+
+```
+results/<run-name>/<slide-abbrev>/
+  riskmap/
+    stageA_riskmap.jpg                     thumbnail with the 8x8 risk overlay and p95 boxes
+    stageB_<region>_occlusion.jpg          Stage B patch with the occlusion importance overlay
+    stageB_<region>_top<k>_r<r>c<c>_zoom.jpg  cellular-level zoom of the strongest occlusion tiles
+  patches/
+    <region>.jpg                           the extracted 2048x2048 Stage B patch
+```
+
+The optional Stage B risk map (`--stage-b-riskmap`, or `stage_b_riskmap` in `CONFIG`) uses occlusion rather than injection into a control, as described in the manuscript: each tile of a Stage B patch is occluded and the drop in the predicted-class logit is recorded. The strongest tiles are then re-read from the WSI at 2048x2048, a third zoom on top of the thumbnail and the region, so the IDH-indicative areas can be inspected at cellular level. The number of tiles re-zoomed per patch is set by `occlusion_topk`. All generated figures are 300 dpi JPGs sized around 2048 pixels.
+
+The integrated diagnosis report is an `.xlsx` with per-slide predictions, probabilities, and confidences, coloured by uncertainty (green for confident, amber for moderate, red for low). In testset mode it also carries the per-fold summary and the 1p/19q codeletion table as separate sheets.
+
+---
+
+## 10. AGGREGATING RESULTS ACROSS FOLDS
 
 The same aggregation reads Stage A and Stage B runs, since both save slide-level `test_predictions.npz` and `efficiency.json`.
 
@@ -360,7 +429,7 @@ Report the headline as the five-fold mean ± std, which captures variation from 
 
 ---
 
-## 10. ABLATIONS
+## 11. ABLATIONS
 
 - **Injection-site stability** (`scripts/stage_a/injection_site_ablation.py`): inject one important tile into every one of the 64 control sites and measure the spread of R. A small coefficient of variation is evidence that R reflects tile content, not position.
 - **Fixed-site injection** (`scripts/stage_a/fixed_site_injection.py`): inject every target tile into one fixed control slot, so the displaced control tile is constant and R reflects tile content alone. Compare its p95 set to the standard same-position map.
@@ -369,7 +438,7 @@ Report the headline as the five-fold mean ± std, which captures variation from 
 
 ---
 
-## 11. OUTPUTS
+## 12. OUTPUTS
 
 ### Stage A / Stage B run
 
@@ -396,6 +465,17 @@ training_output[_stageB]/<experiment_name>/
   aggregate_figure.png / .pdf
 ```
 
+### End-to-end inference
+
+```
+results/<run-name>/
+  integrated_diagnosis_report.xlsx        (single/folder mode)
+  e2e_testset_report.xlsx                 (testset mode: per-slide + summary + 1p/19q sheets)
+  <slide-abbrev>/                          (fold_<k>/<slide-abbrev>/ in testset mode)
+    riskmap/  stageA_riskmap.jpg, stageB_*_occlusion.jpg, stageB_*_zoom.jpg
+    patches/  <region>.jpg
+```
+
 ### Preprocessing
 
 ```
@@ -406,7 +486,7 @@ metadata.csv
 
 ---
 
-## 12. NOTES AND NEXT STEPS
+## 13. NOTES AND NEXT STEPS
 
 Notes:
 - Thumbnails are 2048x2048 JPGs (quality 90) at 4.0 µm/pixel, each with a JSON sidecar.
@@ -416,7 +496,7 @@ Notes:
 - Report five-fold mean ± std, and treat Stage A threshold tuning as a pre-specified sensitivity analysis.
 
 Next steps:
-- End-to-end inference (Stage A -> p95 extraction -> Stage B -> soft-vote) with a single shipped model per stage.
+- Choose a single shipped model per stage for deployment (best fold, ensemble, or refit on all data), for the single-slide and folder inference modes.
 - External validation cohort (e.g. TCGA) as a generalisation test, added alongside the internal five-fold result.
-- Benchmark rerun on the same five splits for a matched comparison.
+- Benchmark rerun on the same five splits for a matched comparison, including the compute measurements.
 - YAML config system and mixed precision (AMP).
