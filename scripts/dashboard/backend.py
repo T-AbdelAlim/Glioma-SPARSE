@@ -702,19 +702,36 @@ def _save_session_folder(s, gs):
         n = (v - v.min()) / (np.ptp(v) + 1e-8)
         return [[round(float(x), 3) for x in row] for row in n]
     patch_records = []
+    sel_rank = {(x["row"], x["col"]): i + 1
+                for i, x in enumerate(s.get("selected", []))}
+    has_occl = bool(s.get("occlusion"))
     for (r, c), patch in s["patches"].items():
         sel = next((x for x in s.get("selected", []) if x["row"] == r and x["col"] == c), {})
         bbox = s.get("patch_bbox", {}).get((r, c))
         occ_top = s.get("occl_top", {}).get((r, c))
+        imp = s.get("occlusion", {}).get((r, c))
+        occ_grid = None
+        zoom_file = None
+        if imp is not None:
+            n = (imp - imp.min()) / (np.ptp(imp) + 1e-8)
+            occ_grid = [[round(float(x), 3) for x in row] for row in n]
+        if occ_top is not None:
+            rank = sel_rank.get((r, c), 0)
+            sr, sc = occ_top["cell"]
+            zoom_file = (f"stageB_{s['slide_id']}_rank{rank:02d}_r{r}c{c}"
+                         f"_top1_r{sr}c{sc}_zoom.jpg")
         patch_records.append({
             "row": r, "col": c,
             "risk": sel.get("risk"), "tissue": sel.get("tissue"),
             "wsi_bbox": list(bbox) if bbox else None,
             "patch_file": f"patch_r{r}c{c}.jpg",
+            "occl_grid": occ_grid,
             "occl_top": ({"cell": list(occ_top["cell"]),
-                          "importance": occ_top["importance"]} if occ_top else None),
+                          "importance": occ_top["importance"],
+                          "zoom_file": zoom_file} if occ_top else None),
         })
     session_json = {
+        "occlusion_available": has_occl,
         "slide_id": s["slide_id"], "slide_path": s["slide_path"],
         "device": DEVICE, "grid": list(GRID),
         "thumbnail_w": s["thumbnail"].size[0], "thumbnail_h": s["thumbnail"].size[1],
@@ -785,7 +802,12 @@ def api_load(req: LoadReq):
     patches = []
     for pr in data.get("patches", []):
         pf = fig / pr["patch_file"]
-        patches.append({**pr, "patch": load_jpg_b64(pf)})
+        rec = {**pr, "patch": load_jpg_b64(pf)}
+        # load the top-cell zoom image if occlusion was computed for this patch
+        ot = pr.get("occl_top")
+        if ot and ot.get("zoom_file"):
+            rec["top_zoom"] = load_jpg_b64(fig / ot["zoom_file"])
+        patches.append(rec)
 
     return {
         "loaded": True,
@@ -798,6 +820,7 @@ def api_load(req: LoadReq):
         "grid": data.get("grid", [8, 8]),
         "risk_grid": data.get("risk_grid"),
         "tissue_in_thumb": data.get("tissue_in_thumb"),
+        "occlusion_available": data.get("occlusion_available", False),
         "selected": data.get("selected", []),
         "patches": patches,
         "stage_a": data.get("stage_a"),
@@ -935,6 +958,42 @@ def api_browse_output():
         raise HTTPException(400, f"native dialog unavailable ({e}); type the path")
 
 
+BATCH_PROGRESS = {}   # run_id -> {total, done, current, ok, errors, finished, run_dir, index}
+
+
+def _run_batch(run_id, slides, run_dir, req):
+    prog = BATCH_PROGRESS[run_id]
+    index = {"run_id": run_id, "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+             "input_folder": req.input_folder, "archA": req.archA, "archB": req.archB,
+             "percentile": req.percentile, "occlusion": req.occlusion,
+             "n_slides": len(slides), "slides": []}
+    for i, sp in enumerate(slides):
+        prog["current"] = sp.stem
+        prog["done"] = i
+        entry = {"slide_id": sp.stem, "index": i + 1, "status": "ok"}
+        try:
+            s = _process_slide_headless(sp, req.archA, req.archB,
+                                        req.percentile, req.occlusion)
+            gs = run_dir / f"GS_{_abbrev(sp.stem)}"
+            _save_session_folder(s, gs)
+            entry["folder"] = str(gs)
+            entry["diagnosis"] = s["results"].get("integrated", {}).get("diagnosis", "")
+            entry["grade"] = s["results"].get("stage_a", {}).get("grade_pred", "")
+            entry["subtype"] = s["results"].get("stage_b", {}).get("subtype_pred", "")
+            entry["confidence"] = s["results"].get("integrated", {}).get("confidence", "")
+            prog["ok"] += 1
+        except Exception as e:
+            entry["status"] = "error"; entry["error"] = str(e)
+            prog["errors"] += 1
+        index["slides"].append(entry)
+        prog["done"] = i + 1
+    (run_dir / "batch_index.json").write_text(json.dumps(index, indent=2, default=str))
+    _write_batch_xlsx(run_dir / "batch_summary.xlsx", index)
+    prog["finished"] = True
+    prog["current"] = None
+    prog["index"] = index
+
+
 @app.post("/api/batch")
 def api_batch(req: BatchReq):
     inp = Path(req.input_folder)
@@ -953,30 +1012,27 @@ def api_batch(req: BatchReq):
     run_dir = out_root / f"{run_id}_GS_batchrun"
     run_dir.mkdir(parents=True, exist_ok=False)
 
-    index = {"run_id": run_id, "created": time.strftime("%Y-%m-%d %H:%M:%S"),
-             "input_folder": str(inp), "archA": req.archA, "archB": req.archB,
-             "percentile": req.percentile, "occlusion": req.occlusion,
-             "n_slides": len(slides), "slides": []}
+    BATCH_PROGRESS[run_id] = {
+        "total": len(slides), "done": 0, "current": None,
+        "ok": 0, "errors": 0, "finished": False,
+        "run_dir": str(run_dir), "index": None}
 
-    for i, sp in enumerate(slides):
-        entry = {"slide_id": sp.stem, "index": i + 1, "status": "ok"}
-        try:
-            s = _process_slide_headless(sp, req.archA, req.archB,
-                                        req.percentile, req.occlusion)
-            gs = run_dir / f"GS_{_abbrev(sp.stem)}"
-            _save_session_folder(s, gs)
-            entry["folder"] = str(gs)
-            entry["diagnosis"] = s["results"].get("integrated", {}).get("diagnosis", "")
-            entry["grade"] = s["results"].get("stage_a", {}).get("grade_pred", "")
-            entry["subtype"] = s["results"].get("stage_b", {}).get("subtype_pred", "")
-            entry["confidence"] = s["results"].get("integrated", {}).get("confidence", "")
-        except Exception as e:
-            entry["status"] = "error"; entry["error"] = str(e)
-        index["slides"].append(entry)
+    import threading
+    t = threading.Thread(target=_run_batch, args=(run_id, slides, run_dir, req),
+                         daemon=True)
+    t.start()
+    # return immediately; frontend polls /api/batch_progress
+    return {"run_id": run_id, "run_dir": str(run_dir), "total": len(slides),
+            "started": True}
 
-    (run_dir / "batch_index.json").write_text(json.dumps(index, indent=2, default=str))
-    _write_batch_xlsx(run_dir / "batch_summary.xlsx", index)
-    return {"run_dir": str(run_dir), "run_id": run_id, "index": index}
+
+@app.post("/api/batch_progress")
+def api_batch_progress(req: LoadReq):
+    """req.folder carries the run_id here."""
+    p = BATCH_PROGRESS.get(req.folder)
+    if p is None:
+        raise HTTPException(404, "unknown run_id")
+    return p
 
 
 @app.post("/api/batch_index")
