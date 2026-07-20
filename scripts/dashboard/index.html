@@ -137,6 +137,14 @@
       <h3>4 · Run</h3>
       <button id="btnRun" disabled>▶ Run full pipeline</button>
       <button class="sec" id="btnReplay" disabled>↻ Replay animation</button>
+      <div id="runProg" class="hidden" style="margin-top:8px">
+        <div style="height:8px;background:var(--panel2);border:1px solid var(--line);
+          border-radius:5px;overflow:hidden">
+          <div id="runBar" style="height:100%;width:0%;background:var(--accent);
+            transition:width .3s ease"></div>
+        </div>
+        <div id="runProgTxt" style="font-size:11px;color:var(--mut);margin-top:4px"></div>
+      </div>
       <div class="status" id="runStatus"></div>
     </div>
 
@@ -155,6 +163,14 @@
       <button class="sec" id="btnBatchOut" style="margin-top:8px">📂 Output location…</button>
       <div class="status" id="batchOutStatus"></div>
       <button id="btnBatchRun" style="margin-top:8px" disabled>▶ Run batch</button>
+      <div id="batchProg" class="hidden" style="margin-top:8px">
+        <div style="height:8px;background:var(--panel2);border:1px solid var(--line);
+          border-radius:5px;overflow:hidden">
+          <div id="batchBar" style="height:100%;width:0%;background:var(--accent);
+            transition:width .3s ease"></div>
+        </div>
+        <div id="batchProgTxt" style="font-size:11px;color:var(--mut);margin-top:4px"></div>
+      </div>
       <div class="status" id="batchStatus"></div>
       <button class="sec" id="btnBatchOpen" style="margin-top:8px">📊 Open batch run…</button>
       <div class="status" id="batchOpenStatus"></div>
@@ -257,7 +273,7 @@ let S={session:null,archA:"resnet50",archB:"resnet50",
   gridR:8,gridC:8,
   selected:[],risk:null,lastRun:null,
   lastCfg:null,_fadeInKeys:null,_occlRevealOnly:false,
-  patchCache:{},occlCache:{}};   // key "r_c" -> patch record / occlusion, reused across percentile changes
+  patchCache:{},occlCache:{},occlAvailable:true};   // key "r_c" -> patch record / occlusion, reused across percentile changes
 const ARCH_LABEL={resnet18:"ResNet18",resnet50:"ResNet50"};
 
 // ---- config ----
@@ -315,6 +331,24 @@ function showBusy(msg){
 }
 function setBusy(msg){const m=$("busyMsg");if(m)m.textContent=msg;}
 function hideBusy(){const b=$("busy");if(b)b.style.display="none";}
+
+// enable/disable the Stage B occlusion toggle (disabled for loaded results that
+// have no occlusion data saved)
+function setOcclToggleEnabled(on){
+  const t=$("tOccl");
+  if(on){t.style.pointerEvents="";t.style.opacity="";t.title="";}
+  else{t.style.pointerEvents="none";t.style.opacity=".4";
+    t.title="No Stage B occlusion data in this result (run batch with occlusion on to include it)";}
+}
+
+// rough single-run progress bar under Replay
+function runProgress(frac,label){
+  const bar=$("runBar"),wrap=$("runProg"),txt=$("runProgTxt");
+  if(frac==null){wrap.classList.add("hidden");return;}
+  wrap.classList.remove("hidden");
+  bar.style.width=Math.round(frac*100)+"%";
+  txt.textContent=label||"";
+}
 $("segA").onclick=e=>{if(e.target.dataset.a){S.archA=e.target.dataset.a;
   [...$("segA").children].forEach(b=>b.classList.toggle("on",b.dataset.a===S.archA));}};
 $("segB").onclick=e=>{if(e.target.dataset.b){S.archB=e.target.dataset.b;
@@ -432,6 +466,7 @@ $("btnImport").onclick=async()=>{
     S.tissueInThumb=r.tissue_in_thumb||null;
     S.selected=[];S.risk=null;S.lastRun=null;
     S.patchCache={};S.occlCache={};S.lastCfg=null;
+    S.occlAvailable=true;setOcclToggleEnabled(true);   // live session can compute occlusion
     $("importStatus").innerHTML=`✓ ${r.slide_id} · tissue ${(r.tissue_fraction*100).toFixed(0)}% · ${r.elapsed_sec}s`
       +`<br><span style="color:var(--mut)">saves to ${r.gs_dir.split(/[\\/]/).pop()} on Save</span>`;
     $("btnRun").disabled=false;$("btnSave").disabled=true;$("btnReplay").disabled=true;
@@ -494,15 +529,16 @@ async function runPipeline(animate){
   const archBchanged = !prev || prev.archB!==cfg.archB;
   const pctChanged   = !prev || prev.pct!==cfg.pct;
   try{
+    runProgress(0.05,"Stage A grade…");
     // Stage A + risk map: recompute only if the Stage A model changed.
-    // (backend reuses the cached risk map when archA is unchanged, so this is
-    //  cheap even when we call it; selection re-thresholds on the new percentile.)
     let A=S.lastRun&&!archAchanged?S.lastRun.A:null;
     if(!A){st.innerHTML='<span class="spinner"></span>Stage A grade…';
       A=await API("stage_a",{session_id:S.session,arch:S.archA});}
+    runProgress(0.12,"Stage A signal map…");
     st.innerHTML='<span class="spinner"></span>Stage A signal map…';
     const R=await API("risk_map",{session_id:S.session,percentile:pct,cap:0});
     S.selected=R.selected;S.risk=R;S.gridR=R.grid_rows||8;S.gridC=R.grid_cols||8;
+    runProgress(0.30,`selected ${R.selected.length} tiles`);
 
     // Extract patches: reuse any already extracted this session (backend caches
     // by row/col); only new tiles cost a WSI read. If archA changed the
@@ -516,14 +552,18 @@ async function runPipeline(animate){
     const prevPatches={};
     if(S.lastRun&&!archAchanged) for(const p of S.lastRun.patches) prevPatches[p.row+"_"+p.col]=p;
     const patches=[];
-    for(const sel of R.selected){
+    const nTiles=R.selected.length;
+    for(let ti=0;ti<R.selected.length;ti++){
+      const sel=R.selected[ti];
       const key=sel.row+"_"+sel.col;
+      runProgress(0.30+0.40*(ti/Math.max(1,nTiles)),`extracting tile ${ti+1}/${nTiles}`);
       if(prevPatches[key]){patches.push(prevPatches[key]);continue;}
       if(S.patchCache[key]){patches.push(S.patchCache[key]);continue;}   // session cache
       st.innerHTML=`<span class="spinner"></span>extracting r${sel.row}c${sel.col}…`;
       const E=await API("extract",{session_id:S.session,row:sel.row,col:sel.col});
       const rec={...sel,...E};patches.push(rec);S.patchCache[key]=rec;
     }
+    runProgress(0.72,"Stage B molecular…");
 
     // Stage B: re-run if archB changed OR the tile set changed; else reuse.
     let B;
@@ -536,21 +576,29 @@ async function runPipeline(animate){
     // Occlusion: reuse session cache; compute only tiles that lack it.
     let occl={};
     if(S.occl){
+      runProgress(0.80,"occlusion maps…");
+      const occNeed=R.selected.filter(sel=>!S.occlCache[sel.row+"_"+sel.col]);
+      let oi=0;
       for(const sel of R.selected){
         const key=sel.row+"_"+sel.col;
         if(S.occlCache[key]){occl[key]=S.occlCache[key];continue;}
         st.innerHTML=`<span class="spinner"></span>occlusion r${sel.row}c${sel.col}…`;
+        runProgress(0.80+0.15*(oi/Math.max(1,occNeed.length)),
+          `occlusion ${oi+1}/${occNeed.length}`);
         occl[key]=await API("stage_b_occlusion",
           {session_id:S.session,row:sel.row,col:sel.col,arch:S.archB});
-        S.occlCache[key]=occl[key];
+        S.occlCache[key]=occl[key];oi++;
       }
     }
+    runProgress(0.97,"integrating…");
     const I=await API("integrate",{session_id:S.session,arch:S.archB});
     S.lastRun={A,R,patches,B,occl,I};S.lastCfg=cfg;
+    runProgress(1.0,"complete");
     st.textContent="✓ complete";
     $("btnSave").disabled=false;$("btnReplay").disabled=false;
     if(animate)await animateFrom(S.lastRun); else renderStatic();
-  }catch(e){st.textContent="✕ "+e.message;}
+    setTimeout(()=>runProgress(null),800);   // hide bar shortly after
+  }catch(e){st.textContent="✕ "+e.message;runProgress(null);}
   $("btnRun").disabled=false;
 }
 
@@ -924,17 +972,35 @@ function updateBatchRun(){$("btnBatchRun").disabled=!(batchCfg.input&&batchCfg.o
 $("btnBatchRun").onclick=async()=>{
   if(!batchCfg.input||!batchCfg.output)return;
   $("btnBatchRun").disabled=true;
-  $("batchStatus").innerHTML='<span class="spinner"></span>processing… this runs the full pipeline on every slide and may take a while';
-  showBusy("Batch processing… (see sidebar)");
+  $("batchStatus").textContent="";
+  $("batchProg").classList.remove("hidden");
+  $("batchBar").style.width="0%";
+  $("batchProgTxt").textContent="starting…";
   try{
-    const r=await API("batch",{input_folder:batchCfg.input,output_location:batchCfg.output,
+    const start=await API("batch",{input_folder:batchCfg.input,output_location:batchCfg.output,
       archA:S.archA,archB:S.archB,percentile:+$("pct").value,occlusion:S.occl});
-    hideBusy();
-    const ok=r.index.slides.filter(s=>s.status==="ok").length;
-    $("batchStatus").innerHTML=`✓ ${ok}/${r.index.n_slides} slides → ${r.run_dir.split(/[\\/]/).pop()}`;
-    showBatchTable(r.index,r.run_dir);
-  }catch(e){hideBusy();$("batchStatus").textContent="✕ "+e.message;}
-  $("btnBatchRun").disabled=false;
+    const runId=start.run_id, total=start.total;
+    // poll progress until finished
+    const poll=async()=>{
+      const p=await API("batch_progress",{folder:runId});
+      const pct=total?Math.round(p.done/total*100):0;
+      $("batchBar").style.width=pct+"%";
+      const cur=p.current?` · processing ${p.current}`:"";
+      $("batchProgTxt").textContent=`${p.done}/${total} slides (${pct}%)`+
+        (p.errors?` · ${p.errors} error${p.errors>1?"s":""}`:"")+cur;
+      if(p.finished){
+        $("batchProgTxt").textContent=`done · ${p.ok}/${total} ok`+
+          (p.errors?` · ${p.errors} errors`:"");
+        $("batchStatus").innerHTML=`✓ ${p.run_dir.split(/[\\/]/).pop()}`;
+        showBatchTable(p.index,p.run_dir);
+        $("btnBatchRun").disabled=false;
+        return;
+      }
+      setTimeout(poll,700);
+    };
+    poll();
+  }catch(e){$("batchProgTxt").textContent="";$("batchStatus").textContent="✕ "+e.message;
+    $("btnBatchRun").disabled=false;}
 };
 
 $("btnBatchOpen").onclick=async()=>{
@@ -1019,7 +1085,23 @@ async function loadFolder(folder){
       I:{integrated_diagnosis:d.integrated?.diagnosis||"—",
          integrated_confidence:d.integrated?.confidence||0},
     };
-    S.lastRun=run;S.selected=d.selected;S.occl=false;$("tOccl").classList.remove("on");
+    // reconstruct occlusion overlays from the saved grids, if present
+    for(const p of d.patches){
+      if(p.occl_grid){
+        run.occl[p.row+"_"+p.col]={
+          importance_grid:p.occl_grid,
+          grid:[p.occl_grid.length,p.occl_grid[0].length],
+          top_cell:p.occl_top?p.occl_top.cell:null,
+          top_zoom:p.top_zoom||null,
+        };
+      }
+    }
+    // gate the occlusion toggle on whether this result has occlusion data
+    const occlAvail=!!d.occlusion_available;
+    S.occlAvailable=occlAvail;
+    S.occl=false;$("tOccl").classList.remove("on");
+    setOcclToggleEnabled(occlAvail);
+    S.lastRun=run;S.selected=d.selected;
     $("btnSave").disabled=true;$("btnReplay").disabled=false;
     $("loadStatus").innerHTML=`✓ loaded ${d.slide_id}<br>`+
       `<span style="color:var(--mut)">${d.folder.split(/[\\/]/).pop()}</span>`;
