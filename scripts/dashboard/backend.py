@@ -308,6 +308,20 @@ def _abbrev(stem):
     return head if len(head) >= 6 else stem[:12]
 
 
+def _tissue_in_thumb(mapping):
+    """Rectangle (in thumbnail pixels) where real tissue sits, excluding the
+    padding that create_wsi_thumbnail added to square the image. Lets the WSI
+    mini-map crop the padding so it aligns with true level-0 coordinates."""
+    S = float(mapping.canvas_size)
+    T = float(mapping.thumbnail_size)
+    Wt, Ht = mapping.tissue_image_dim
+    off_x, off_y = mapping.tissue_offset_in_canvas
+    scale = T / S   # canvas -> thumbnail
+    return {"x": round(off_x * scale, 1), "y": round(off_y * scale, 1),
+            "w": round(Wt * scale, 1), "h": round(Ht * scale, 1),
+            "thumb": int(T)}
+
+
 @app.post("/api/import")
 def api_import(req: ImportReq):
     import tempfile
@@ -353,6 +367,7 @@ def api_import(req: ImportReq):
         "wsi_level0_dim": mapping.wsi_level0_dim,
         "tissue_fraction": round(float(tissue_frac), 4),
         "has_wsi_mapping": mapping.has_wsi_mapping(),
+        "tissue_in_thumb": _tissue_in_thumb(mapping),
         "elapsed_sec": round(time.time() - t0, 2),
     }
 
@@ -452,6 +467,22 @@ def api_risk_map(req: RiskReq):
 def api_extract(req: ExtractReq):
     s = sess(req.session_id)
     mapping = s["mapping"]
+    # reuse an already-extracted patch (expensive WSI read) if we have it
+    if (req.row, req.col) in s["patches"]:
+        patch = s["patches"][(req.row, req.col)]
+        wx, wy, ww, wh = s.get("patch_bbox", {}).get((req.row, req.col),
+                                                     (0, 0, patch.size[0], patch.size[1]))
+        return {
+            "patch": b64(patch),
+            "bbox_thumb": list(grid_cell_bbox(req.row, req.col, GRID[0], GRID[1],
+                                              mapping.thumbnail_size)),
+            "wsi_bbox": [wx, wy, ww, wh],
+            "wsi_level0_dim": mapping.wsi_level0_dim,
+            "resample_ratio": round(mapping.target_mpp / mapping.base_mpp, 2)
+                if mapping.has_wsi_mapping() else None,
+            "output_size": OUTPUT_SIZE,
+            "cached": True,
+        }
     bbox_thumb = grid_cell_bbox(req.row, req.col, GRID[0], GRID[1],
                                 mapping.thumbnail_size)
     wsi_bbox = thumbnail_bbox_to_wsi(mapping, bbox_thumb)
@@ -586,12 +617,18 @@ def api_integrate(req: StageBReq):
 @app.post("/api/save")
 def api_save(req: SaveReq):
     s = sess(req.session_id)
-    gs = Path(s["gs_dir"])
+    saved = _save_session_folder(s, Path(s["gs_dir"]))
+    xlsx = next((p for p in saved if p.endswith("_report.xlsx")), None)
+    return {"saved": saved, "report": xlsx}
+
+
+def _save_session_folder(s, gs):
+    """Write the full analysis folder (figures, report, session.json) for a
+    session into gs. Shared by single-slide save and batch processing."""
     fig_dir = gs / "figures"; rep_dir = gs / "report"
     fig_dir.mkdir(parents=True, exist_ok=True); rep_dir.mkdir(parents=True, exist_ok=True)
     saved = []
 
-    # move the thumbnail + sidecar from the temp dir into the analysis folder
     import shutil
     tmp_thumb = Path(s["thumb_path"])
     if tmp_thumb.exists():
@@ -602,18 +639,15 @@ def api_save(req: SaveReq):
             shutil.copy2(sidecar, dest_thumb.with_suffix(".json"))
         saved.append(str(dest_thumb))
 
-    # thumbnail + risk overlay figure (2048)
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     def save_fig(fig, name):
         p = fig_dir / name
-        fig.savefig(p, dpi=300, bbox_inches="tight",
-                    pil_kwargs={"quality": 90})
+        fig.savefig(p, dpi=300, bbox_inches="tight", pil_kwargs={"quality": 90})
         plt.close(fig); saved.append(str(p))
 
-    # Stage A risk map with selected boxes
     if "risk_map" in s:
         rm = s["risk_map"]; thumb = s["thumbnail"]
         fig, ax = plt.subplots(figsize=(2048/300, 2048/300))
@@ -630,13 +664,11 @@ def api_save(req: SaveReq):
                      f"{s['results'].get('stage_a',{}).get('grade_pred','')}")
         save_fig(fig, "stageA_riskmap.jpg")
 
-    # each extracted patch at 2048
     for (r, c), patch in s["patches"].items():
         p = fig_dir / f"patch_r{r}c{c}.jpg"
         patch.resize((2048, 2048), Image.BICUBIC).save(p, quality=90)
         saved.append(str(p))
 
-    # occlusion overlays if present
     for (r, c), imp in s.get("occlusion", {}).items():
         patch = s["patches"][(r, c)]
         fig, ax = plt.subplots(figsize=(2048/300, 2048/300))
@@ -649,7 +681,6 @@ def api_save(req: SaveReq):
         ax.set_title(f"Stage B occlusion  r{r}c{c}")
         save_fig(fig, f"stageB_occlusion_r{r}c{c}.jpg")
 
-    # top-1 occlusion cellular zoom (real level-0 re-read), e2e naming
     sel_rank = {(sel["row"], sel["col"]): i + 1
                 for i, sel in enumerate(s.get("selected", []))}
     for (r, c), info in s.get("occl_top", {}).items():
@@ -660,17 +691,15 @@ def api_save(req: SaveReq):
         info["zoom"].resize((2048, 2048), Image.BICUBIC).save(fig_dir / name, quality=90)
         saved.append(str(fig_dir / name))
 
-    # colored xlsx report
     xlsx_path = rep_dir / f"{s['slide_id']}_report.xlsx"
     _write_xlsx(xlsx_path, s)
     saved.append(str(xlsx_path))
 
-    # rich session state for reload (everything the frontend needs to re-render)
     def grid_or_none(k):
         v = s.get(k)
         if v is None:
             return None
-        n = (v - v.min()) / (np.ptp(v) + 1e-8)   # normalised for rendering
+        n = (v - v.min()) / (np.ptp(v) + 1e-8)
         return [[round(float(x), 3) for x in row] for row in n]
     patch_records = []
     for (r, c), patch in s["patches"].items():
@@ -690,6 +719,7 @@ def api_save(req: SaveReq):
         "device": DEVICE, "grid": list(GRID),
         "thumbnail_w": s["thumbnail"].size[0], "thumbnail_h": s["thumbnail"].size[1],
         "wsi_level0_dim": s["mapping"].wsi_level0_dim,
+        "tissue_in_thumb": _tissue_in_thumb(s["mapping"]),
         "resample_ratio": (round(s["mapping"].target_mpp / s["mapping"].base_mpp, 3)
                            if s["mapping"].has_wsi_mapping() else None),
         "risk_grid": grid_or_none("risk_map"),
@@ -703,15 +733,13 @@ def api_save(req: SaveReq):
     (gs / "session.json").write_text(json.dumps(session_json, indent=2, default=str))
     saved.append(str(gs / "session.json"))
 
-    # settings json
     (rep_dir / "settings.json").write_text(json.dumps({
         "slide_id": s["slide_id"], "slide_path": s["slide_path"],
         "device": DEVICE, "grid": GRID, "target_mpp": TARGET_MPP,
         "results": s["results"],
     }, indent=2, default=str))
     saved.append(str(rep_dir / "settings.json"))
-
-    return {"saved": saved, "report": str(xlsx_path)}
+    return saved
 
 
 # ---- 8. BROWSE FOLDER + LOAD PREVIOUS RESULT ----
@@ -769,12 +797,225 @@ def api_load(req: LoadReq):
         "resample_ratio": data.get("resample_ratio"),
         "grid": data.get("grid", [8, 8]),
         "risk_grid": data.get("risk_grid"),
+        "tissue_in_thumb": data.get("tissue_in_thumb"),
         "selected": data.get("selected", []),
         "patches": patches,
         "stage_a": data.get("stage_a"),
         "stage_b": data.get("stage_b"),
         "integrated": data.get("integrated"),
     }
+
+
+# ============================================================
+# BATCH PROCESSING
+# ============================================================
+
+class BatchReq(BaseModel):
+    input_folder: str
+    output_location: str
+    archA: str = "resnet50"
+    archB: str = "resnet50"
+    percentile: float = 95.0
+    occlusion: bool = False
+
+
+def _process_slide_headless(slide_path, archA, archB, percentile, occlusion):
+    """Run the full pipeline on one slide with no HTTP session, returning a
+    session-like dict ready for _save_session_folder."""
+    import tempfile
+    tmp_dir = Path(tempfile.mkdtemp(prefix="gs_batch_"))
+    thumb_path = tmp_dir / f"{slide_path.stem}.jpg"
+    thumbnail, tissue_frac, _ = create_wsi_thumbnail(
+        slide_path, output_path=str(thumb_path),
+        target_mpp=TARGET_MPP, output_size=THUMB_SIZE)
+    mapping = load_mapping(thumb_path)
+    s = {"slide_path": str(slide_path), "slide_id": slide_path.stem,
+         "thumb_path": str(thumb_path), "thumbnail": thumbnail, "mapping": mapping,
+         "patches": {}, "patch_bbox": {}, "occlusion": {}, "occl_top": {},
+         "results": {}}
+
+    # Stage A
+    mA = get_model("stage_a", archA)
+    probsA, _ = forward_probs(mA, thumbnail)
+    predA = int(np.argmax(probsA))
+    s["stage_a"] = {"arch": archA, "probs": probsA, "pred_idx": predA}
+    s["results"]["stage_a"] = {
+        "arch": archA, "grade_pred": GRADE_CLASSES[predA],
+        "prob_control": round(float(probsA[0]), 2),
+        "prob_low_grade": round(float(probsA[1]), 2),
+        "prob_high_grade": round(float(probsA[2]), 2),
+        "confidence": entropy_conf(probsA)}
+
+    # risk map + selection
+    risk_map, _ = compute_risk_map(
+        target_img=thumbnail, control_img=control_img(), model=mA,
+        transform=_transform, grid=GRID, target_class=predA,
+        device=DEVICE, control_shuffle_seed=SEED, score="logit")
+    s["risk_map"] = risk_map
+    thresh = float(np.percentile(risk_map.flatten(), percentile))
+    cand = []
+    for r in range(GRID[0]):
+        for c in range(GRID[1]):
+            if risk_map[r, c] >= thresh:
+                tf = _tissue_fraction(thumbnail, r, c, GRID)
+                if tf >= 0.25:
+                    cand.append({"row": r, "col": c,
+                                 "risk": round(float(risk_map[r, c]), 2),
+                                 "tissue": round(tf, 2)})
+    cand.sort(key=lambda d: -d["risk"])
+    s["selected"] = cand
+
+    # extract + Stage B
+    mB = get_model("stage_b", archB)
+    slide = openslide.OpenSlide(mapping.wsi_path)
+    probs_stack = []
+    try:
+        for sel in cand:
+            bbox_thumb = grid_cell_bbox(sel["row"], sel["col"], GRID[0], GRID[1],
+                                        mapping.thumbnail_size)
+            wsi_bbox = thumbnail_bbox_to_wsi(mapping, bbox_thumb)
+            if wsi_bbox is None:
+                continue
+            wx, wy, ww, wh = wsi_bbox
+            patch = slide.read_region((wx, wy), 0, (ww, wh)).convert("RGB")
+            if patch.size != (OUTPUT_SIZE, OUTPUT_SIZE):
+                patch = patch.resize((OUTPUT_SIZE, OUTPUT_SIZE), Image.BICUBIC)
+            s["patches"][(sel["row"], sel["col"])] = patch
+            s["patch_bbox"][(sel["row"], sel["col"])] = (wx, wy, ww, wh)
+            pv, _ = forward_probs(mB, patch)
+            probs_stack.append(pv)
+            if occlusion:
+                pidx = int(np.argmax(pv))
+                imp = occlusion_map(mB, patch, pidx)
+                s["occlusion"][(sel["row"], sel["col"])] = imp
+                flat = sorted(((imp[a, b], a, b) for a in range(GRID[0])
+                               for b in range(GRID[1])), key=lambda t: -t[0])
+                tv, tr, tc = flat[0]
+                zoom = extract_subtile(slide, (wx, wy, ww, wh), tr, tc, OUTPUT_SIZE)
+                if zoom is None:
+                    tw, th = patch.size[0]//GRID[1], patch.size[1]//GRID[0]
+                    zoom = patch.crop((tc*tw, tr*th, tc*tw+tw, tr*th+th)).resize(
+                        (OUTPUT_SIZE, OUTPUT_SIZE), Image.BICUBIC)
+                s["occl_top"][(sel["row"], sel["col"])] = {
+                    "zoom": zoom, "cell": (int(tr), int(tc)),
+                    "importance": round(float(tv), 2)}
+    finally:
+        slide.close()
+
+    if probs_stack:
+        slide_probs = np.mean(np.stack(probs_stack, 0), axis=0)
+        predB = int(np.argmax(slide_probs))
+        s["stage_b"] = {"arch": archB, "slide_probs": slide_probs, "pred_idx": predB}
+        s["results"]["stage_b"] = {
+            "arch": archB, "subtype_pred": SUBTYPE_CLASSES[predB],
+            "prob_IDH_mt": round(float(slide_probs[0]), 2),
+            "prob_IDH_mt_1p19q": round(float(slide_probs[1]), 2),
+            "prob_IDH_wt": round(float(slide_probs[2]), 2),
+            "confidence": entropy_conf(slide_probs),
+            "n_patches": len(probs_stack)}
+        gc = grade_class_short(GRADE_CLASSES[predA])
+        st = SUBTYPE_CLASSES[predB]
+        dx = "Control tissue" if gc == "control" else INTEGRATED.get((gc, st), "Unresolved")
+        s["results"]["integrated"] = {
+            "diagnosis": dx,
+            "confidence": round(entropy_conf(probsA) * entropy_conf(slide_probs), 2)}
+    return s
+
+
+@app.post("/api/browse_output")
+def api_browse_output():
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk(); root.withdraw(); root.attributes("-topmost", True)
+        path = filedialog.askdirectory(title="Select where the batch run folder will be created")
+        root.destroy()
+        return {"folder": path or ""}
+    except Exception as e:
+        raise HTTPException(400, f"native dialog unavailable ({e}); type the path")
+
+
+@app.post("/api/batch")
+def api_batch(req: BatchReq):
+    inp = Path(req.input_folder)
+    if not inp.is_dir():
+        raise HTTPException(400, f"not a folder: {inp}")
+    out_root = Path(req.output_location)
+    if not out_root.is_dir():
+        raise HTTPException(400, f"output location not found: {out_root}")
+
+    slides = sorted([p for p in inp.iterdir()
+                     if p.suffix.lower() in SUPPORTED_EXTS_BATCH])
+    if not slides:
+        raise HTTPException(400, f"no WSIs in {inp}")
+
+    run_id = uuid.uuid4().hex[:8]
+    run_dir = out_root / f"{run_id}_GS_batchrun"
+    run_dir.mkdir(parents=True, exist_ok=False)
+
+    index = {"run_id": run_id, "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+             "input_folder": str(inp), "archA": req.archA, "archB": req.archB,
+             "percentile": req.percentile, "occlusion": req.occlusion,
+             "n_slides": len(slides), "slides": []}
+
+    for i, sp in enumerate(slides):
+        entry = {"slide_id": sp.stem, "index": i + 1, "status": "ok"}
+        try:
+            s = _process_slide_headless(sp, req.archA, req.archB,
+                                        req.percentile, req.occlusion)
+            gs = run_dir / f"GS_{_abbrev(sp.stem)}"
+            _save_session_folder(s, gs)
+            entry["folder"] = str(gs)
+            entry["diagnosis"] = s["results"].get("integrated", {}).get("diagnosis", "")
+            entry["grade"] = s["results"].get("stage_a", {}).get("grade_pred", "")
+            entry["subtype"] = s["results"].get("stage_b", {}).get("subtype_pred", "")
+            entry["confidence"] = s["results"].get("integrated", {}).get("confidence", "")
+        except Exception as e:
+            entry["status"] = "error"; entry["error"] = str(e)
+        index["slides"].append(entry)
+
+    (run_dir / "batch_index.json").write_text(json.dumps(index, indent=2, default=str))
+    _write_batch_xlsx(run_dir / "batch_summary.xlsx", index)
+    return {"run_dir": str(run_dir), "run_id": run_id, "index": index}
+
+
+@app.post("/api/batch_index")
+def api_batch_index(req: LoadReq):
+    """Load a batch run's index (req.folder = the *_GS_batchrun dir)."""
+    idx = Path(req.folder) / "batch_index.json"
+    if not idx.exists():
+        raise HTTPException(400, f"no batch_index.json in {req.folder}")
+    return json.loads(idx.read_text())
+
+
+SUPPORTED_EXTS_BATCH = (".svs", ".ndpi", ".tif", ".tiff", ".mrxs")
+
+
+def _write_batch_xlsx(path, index):
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    HEAD = "305496"
+    wb = Workbook(); ws = wb.active; ws.title = "batch"
+    ws.append([f"Glioma-SPARSE batch run {index['run_id']}"])
+    ws["A1"].font = Font(bold=True, size=14, color="1F3864")
+    ws.append(["created", index["created"], "models",
+               f"A:{index['archA']} B:{index['archB']}", "p", index["percentile"]])
+    ws.append([])
+    hdr = ["#", "slide_id", "grade", "subtype", "integrated diagnosis",
+           "confidence", "status"]
+    ws.append(hdr)
+    for j in range(1, len(hdr) + 1):
+        c = ws.cell(row=ws.max_row, column=j)
+        c.font = Font(bold=True, color="FFFFFF")
+        c.fill = PatternFill("solid", fgColor=HEAD)
+    for e in index["slides"]:
+        ws.append([e["index"], e["slide_id"], e.get("grade", ""),
+                   e.get("subtype", ""), e.get("diagnosis", e.get("error", "")),
+                   e.get("confidence", ""), e["status"]])
+    for col in ws.columns:
+        w = max((len(str(c.value)) for c in col if c.value is not None), default=10)
+        ws.column_dimensions[col[0].column_letter].width = min(w + 2, 50)
+    wb.save(path)
 
 
 def _write_xlsx(path, s):
