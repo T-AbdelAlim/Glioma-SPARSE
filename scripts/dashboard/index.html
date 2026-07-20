@@ -102,7 +102,7 @@
         <input type="text" id="slidePath" placeholder="C:\path\to\slide.ndpi" style="flex:1">
         <button id="btnBrowse" class="sec" style="width:auto;margin-top:0;padding:8px 12px;white-space:nowrap">Browse…</button>
       </div>
-      <button id="btnImport">Import &amp; build thumbnail</button>
+      <button id="btnImport" disabled>Build thumbnail</button>
       <div class="status" id="importStatus"></div>
     </div>
 
@@ -147,6 +147,18 @@
       <button class="sec" id="btnLoad" style="margin-top:10px">📂 Load previous result</button>
       <div class="status" id="loadStatus"></div>
     </div>
+
+    <div class="group">
+      <h3>6 · Batch processing</h3>
+      <button class="sec" id="btnBatchIn">📁 Input folder…</button>
+      <div class="status" id="batchInStatus"></div>
+      <button class="sec" id="btnBatchOut" style="margin-top:8px">📂 Output location…</button>
+      <div class="status" id="batchOutStatus"></div>
+      <button id="btnBatchRun" style="margin-top:8px" disabled>▶ Run batch</button>
+      <div class="status" id="batchStatus"></div>
+      <button class="sec" id="btnBatchOpen" style="margin-top:8px">📊 Open batch run…</button>
+      <div class="status" id="batchOpenStatus"></div>
+    </div>
   </div>
 
   <!-- STAGE -->
@@ -167,6 +179,22 @@
       <div class="dx" id="dxText">—</div>
       <div class="conf" id="dxConf"></div>
     </div>
+    <!-- batch results overlay -->
+    <div id="batchPanel" class="hidden" style="position:absolute;inset:0;
+      background:rgba(8,11,16,.94);z-index:20;display:flex;align-items:center;
+      justify-content:center;padding:30px">
+      <div style="background:var(--panel);border:1px solid var(--line);border-radius:12px;
+        max-width:820px;width:100%;max-height:100%;overflow:auto;padding:20px">
+        <div style="display:flex;justify-content:space-between;align-items:start">
+          <h2 id="batchTitle" style="margin:0;font-size:16px">Batch run</h2>
+          <button onclick="$('batchPanel').classList.add('hidden')"
+            style="width:auto;margin:0;padding:6px 12px" class="sec">✕ Close</button>
+        </div>
+        <div id="batchMeta" style="font-size:12px;color:var(--mut);margin:6px 0 12px"></div>
+        <div id="batchTable"></div>
+      </div>
+    </div>
+
     <!-- click-to-inspect overlay -->
     <div id="inspect" class="hidden" style="position:absolute;inset:0;
       background:rgba(8,11,16,.92);z-index:20;align-items:center;
@@ -225,10 +253,11 @@ const INK={control:"#3a3a2e",low_grade:"#6b4e18",high_grade:"#fff",
 
 let S={session:null,archA:"resnet50",archB:"resnet50",
   signal:true,pred:true,raw:false,occl:false,
-  thumb:null,thumbSize:2048,thumbW:2048,thumbH:2048,wsiDim:null,
+  thumb:null,thumbSize:2048,thumbW:2048,thumbH:2048,wsiDim:null,tissueInThumb:null,
   gridR:8,gridC:8,
   selected:[],risk:null,lastRun:null,
-  lastCfg:null};   // {archA,archB,pct} of the last successful run, for incremental reuse
+  lastCfg:null,_fadeInKeys:null,_occlRevealOnly:false,
+  patchCache:{},occlCache:{}};   // key "r_c" -> patch record / occlusion, reused across percentile changes
 const ARCH_LABEL={resnet18:"ResNet18",resnet50:"ResNet50"};
 
 // ---- config ----
@@ -243,21 +272,49 @@ $("tOccl").onclick=async()=>{
   S.occl=!S.occl;$("tOccl").classList.toggle("on",S.occl);
   if(!S.lastRun)return;
   if(S.occl){
-    // compute occlusion for any current tiles that lack it, then re-render
     if(!S.session){renderStatic();return;}   // loaded result: no live model
     const need=S.lastRun.patches.filter(p=>!S.lastRun.occl[p.row+"_"+p.col]);
     if(need.length){
+      $("tOccl").style.pointerEvents="none";$("tOccl").style.opacity=".6";
+      showBusy(`Computing occlusion maps… 0/${need.length}`);
       const st=$("runStatus");
+      let done=0;
       for(const p of need){
+        setBusy(`Computing occlusion maps… ${done}/${need.length} (r${p.row}c${p.col})`);
         st.innerHTML=`<span class="spinner"></span>occlusion r${p.row}c${p.col}…`;
         S.lastRun.occl[p.row+"_"+p.col]=await API("stage_b_occlusion",
           {session_id:S.session,row:p.row,col:p.col,arch:S.archB});
+        done++;
       }
       st.textContent="✓ occlusion ready";
+      hideBusy();
+      $("tOccl").style.pointerEvents="";$("tOccl").style.opacity="";
     }
   }
-  renderStatic();
+  // gentle reveal: ease the occlusion overlay in rather than snapping, without
+  // re-fading the patches themselves.
+  S._occlRevealOnly=true;
+  await renderStatic();
+  S._occlRevealOnly=false;
 };
+
+// on-canvas busy overlay for slow compute (occlusion), so it's obvious work is
+// happening rather than the UI appearing frozen.
+function showBusy(msg){
+  let b=$("busy");
+  if(!b){
+    b=document.createElement("div");b.id="busy";
+    b.style.cssText="position:absolute;top:16px;left:50%;transform:translateX(-50%);"+
+      "z-index:15;background:rgba(22,27,34,.95);border:1px solid var(--line);"+
+      "border-radius:10px;padding:10px 16px;font-size:13px;display:flex;"+
+      "align-items:center;gap:10px;box-shadow:0 6px 20px rgba(0,0,0,.4)";
+    document.querySelector(".stage-view").appendChild(b);
+  }
+  b.innerHTML=`<span class="spinner"></span><span id="busyMsg">${msg}</span>`;
+  b.style.display="flex";
+}
+function setBusy(msg){const m=$("busyMsg");if(m)m.textContent=msg;}
+function hideBusy(){const b=$("busy");if(b)b.style.display="none";}
 $("segA").onclick=e=>{if(e.target.dataset.a){S.archA=e.target.dataset.a;
   [...$("segA").children].forEach(b=>b.classList.toggle("on",b.dataset.a===S.archA));}};
 $("segB").onclick=e=>{if(e.target.dataset.b){S.archB=e.target.dataset.b;
@@ -265,17 +322,98 @@ $("segB").onclick=e=>{if(e.target.dataset.b){S.archB=e.target.dataset.b;
 $("pct").oninput=e=>{
   $("pctVal").textContent=e.target.value;
   const pct=+e.target.value, ncell=S.gridR*S.gridC;
-  // cells above the pth percentile: at most ceil(ncell*(100-p)/100), ties aside
   const maxT=Math.max(1,Math.ceil(ncell*(100-pct)/100));
   $("pctInfo").textContent=`top ${100-pct}% → up to ${maxT} of ${ncell} tiles into Stage B`;
 };
+// live incremental update when the slider is released (not on every pixel).
+// Raising the percentile only removes tiles (no compute); lowering extracts the
+// new ones with a clear progress state, then re-runs Stage B and re-renders.
+$("pct").onchange=async()=>{
+  if(!S.session||!S.lastRun)return;   // nothing to update until a full run exists
+  const pct=+$("pct").value;
+  if(S.lastCfg&&S.lastCfg.pct===pct)return;
+  await livePercentile(pct);
+};
+
+// smooth transition between percentile settings: fade removed tiles out, then
+// re-render, then fade the newly-added patches in.
+async function transitionPercentile(removed,added){
+  const svg=$("stage");
+  if(removed.length){
+    const fades=[];
+    removed.forEach(p=>{
+      svg.querySelectorAll(`[data-tile="${p.row}_${p.col}"]`).forEach(elm=>{
+        const a=elm.animate([{opacity:getComputedStyle(elm).opacity||1},{opacity:0}],
+          {duration:350,fill:"forwards"});
+        fades.push(a.finished.catch(()=>{}));
+      });
+    });
+    await Promise.allSettled(fades);
+  }
+  S._fadeInKeys=new Set(added.map(s=>s.row+"_"+s.col));
+  await renderStatic();
+  S._fadeInKeys=null;
+}
+
+async function livePercentile(pct){
+  const st=$("runStatus");
+  try{
+    // re-select at the new percentile (backend reuses the cached risk map)
+    const R=await API("risk_map",{session_id:S.session,percentile:pct,cap:0});
+    S.selected=R.selected;S.risk=R;
+    const prev={};for(const p of S.lastRun.patches) prev[p.row+"_"+p.col]=p;
+    const newKeys=R.selected.map(s=>s.row+"_"+s.col);
+    const removed=S.lastRun.patches.filter(p=>!newKeys.includes(p.row+"_"+p.col));
+    // a tile is "new to the view" if not currently shown; but it may still be in
+    // the session cache (extracted at an earlier percentile) — those are free.
+    const added=R.selected.filter(s=>!prev[s.row+"_"+s.col]);
+    const toExtract=added.filter(s=>!S.patchCache[s.row+"_"+s.col]);
+
+    if(toExtract.length){
+      st.innerHTML=`<span class="spinner"></span>extracting ${toExtract.length} new tile${toExtract.length>1?"s":""}…`;
+    }
+    const patches=[];
+    for(const sel of R.selected){
+      const key=sel.row+"_"+sel.col;
+      if(prev[key]){patches.push(prev[key]);continue;}       // already shown
+      if(S.patchCache[key]){patches.push(S.patchCache[key]);continue;} // cached, free
+      st.innerHTML=`<span class="spinner"></span>extracting r${sel.row}c${sel.col}…`;
+      const E=await API("extract",{session_id:S.session,row:sel.row,col:sel.col});
+      const rec={...sel,...E};patches.push(rec);S.patchCache[key]=rec;
+    }
+    // Stage B over the new tile set (fast: one pass per tile)
+    st.innerHTML='<span class="spinner"></span>Stage B molecular…';
+    const B=await API("stage_b",{session_id:S.session,arch:S.archB});
+    // occlusion: reuse cache; compute only for tiles that still lack it
+    let occl={};
+    if(S.occl){
+      for(const sel of R.selected){
+        const key=sel.row+"_"+sel.col;
+        if(S.occlCache[key]){occl[key]=S.occlCache[key];continue;}
+        st.innerHTML=`<span class="spinner"></span>occlusion r${sel.row}c${sel.col}…`;
+        occl[key]=await API("stage_b_occlusion",
+          {session_id:S.session,row:sel.row,col:sel.col,arch:S.archB});
+        S.occlCache[key]=occl[key];
+      }
+    }
+    const I=await API("integrate",{session_id:S.session,arch:S.archB});
+    S.lastRun={A:S.lastRun.A,R,patches,B,occl,I};S.lastCfg={...S.lastCfg,pct};
+    st.textContent=`✓ ${patches.length} tile${patches.length>1?"s":""}`;
+    // fade in only tiles that are genuinely new to the view
+    await transitionPercentile(removed,added);
+  }catch(e){st.textContent="✕ "+e.message;}
+}
 
 // ---- browse (native OS dialog via backend) ----
+$("slidePath").addEventListener("input",()=>{
+  $("btnImport").disabled=!$("slidePath").value.trim();
+});
 $("btnBrowse").onclick=async()=>{
   $("importStatus").innerHTML='<span class="spinner"></span>opening file dialog…';
   try{
     const r=await API("browse",{});
-    if(r.path){$("slidePath").value=r.path;$("importStatus").textContent="✓ selected";}
+    if(r.path){$("slidePath").value=r.path;$("importStatus").textContent="✓ selected";
+      $("btnImport").disabled=false;}
     else{$("importStatus").textContent="no file chosen";}
   }catch(e){$("importStatus").textContent="✕ "+e.message+" — paste a path instead";}
 };
@@ -291,7 +429,9 @@ $("btnImport").onclick=async()=>{
     S.session=r.session_id;S.thumb=r.thumbnail;S.thumbSize=r.thumbnail_size;
     S.thumbW=r.thumbnail_w||r.thumbnail_size;S.thumbH=r.thumbnail_h||r.thumbnail_size;
     S.wsiDim=r.wsi_level0_dim||null;
+    S.tissueInThumb=r.tissue_in_thumb||null;
     S.selected=[];S.risk=null;S.lastRun=null;
+    S.patchCache={};S.occlCache={};S.lastCfg=null;
     $("importStatus").innerHTML=`✓ ${r.slide_id} · tissue ${(r.tissue_fraction*100).toFixed(0)}% · ${r.elapsed_sec}s`
       +`<br><span style="color:var(--mut)">saves to ${r.gs_dir.split(/[\\/]/).pop()} on Save</span>`;
     $("btnRun").disabled=false;$("btnSave").disabled=true;$("btnReplay").disabled=true;
@@ -367,15 +507,22 @@ async function runPipeline(animate){
     // Extract patches: reuse any already extracted this session (backend caches
     // by row/col); only new tiles cost a WSI read. If archA changed the
     // selection may differ, so we key reuse on (row,col).
+    // model change invalidates the cross-percentile caches (patches survive a
+    // Stage A change only if selection identical, so simplest: clear on archA;
+    // occlusion depends on archB, clear on archB).
+    if(archAchanged){S.patchCache={};S.occlCache={};}
+    if(archBchanged){S.occlCache={};}
+
     const prevPatches={};
     if(S.lastRun&&!archAchanged) for(const p of S.lastRun.patches) prevPatches[p.row+"_"+p.col]=p;
     const patches=[];
     for(const sel of R.selected){
       const key=sel.row+"_"+sel.col;
       if(prevPatches[key]){patches.push(prevPatches[key]);continue;}
+      if(S.patchCache[key]){patches.push(S.patchCache[key]);continue;}   // session cache
       st.innerHTML=`<span class="spinner"></span>extracting r${sel.row}c${sel.col}…`;
       const E=await API("extract",{session_id:S.session,row:sel.row,col:sel.col});
-      patches.push({...sel,...E});
+      const rec={...sel,...E};patches.push(rec);S.patchCache[key]=rec;
     }
 
     // Stage B: re-run if archB changed OR the tile set changed; else reuse.
@@ -386,16 +533,16 @@ async function runPipeline(animate){
     else{st.innerHTML='<span class="spinner"></span>Stage B molecular…';
       B=await API("stage_b",{session_id:S.session,arch:S.archB});}
 
-    // Occlusion: only for tiles that need it, reuse the rest.
+    // Occlusion: reuse session cache; compute only tiles that lack it.
     let occl={};
     if(S.occl){
-      const prevOccl=(!archBchanged&&S.lastRun)?S.lastRun.occl:{};
       for(const sel of R.selected){
         const key=sel.row+"_"+sel.col;
-        if(prevOccl[key]){occl[key]=prevOccl[key];continue;}
+        if(S.occlCache[key]){occl[key]=S.occlCache[key];continue;}
         st.innerHTML=`<span class="spinner"></span>occlusion r${sel.row}c${sel.col}…`;
         occl[key]=await API("stage_b_occlusion",
           {session_id:S.session,row:sel.row,col:sel.col,arch:S.archB});
+        S.occlCache[key]=occl[key];
       }
     }
     const I=await API("integrate",{session_id:S.session,arch:S.archB});
@@ -500,7 +647,26 @@ async function animateFrom(run){
     const mg=el("g");mg.setAttribute("opacity",INSTANT?"1":"0");svg.appendChild(mg);
     mg.appendChild(el("rect",{x:mx,y:my,width:mw,height:mh,rx:4,fill:"#0b0e13",
       stroke:"#2a323d","stroke-width":1.5}));
-    mg.appendChild(el("image",{href:S.thumb,x:mx,y:my,width:mw,height:mh,rx:4,opacity:.35}));
+    // Draw the thumbnail's TISSUE region (padding cropped) filling the mini-map,
+    // so it aligns with the WSI level-0 coordinates the red boxes use. Without
+    // this the square padded thumbnail is stretched and the boxes miss.
+    const tit=S.tissueInThumb;
+    if(tit&&tit.w>0){
+      const clipId="wsiclip";
+      let defs=svg.querySelector("defs");
+      if(!defs){defs=el("defs");svg.appendChild(defs);}
+      const cp=el("clipPath",{id:clipId});
+      cp.appendChild(el("rect",{x:mx,y:my,width:mw,height:mh,rx:4}));
+      defs.appendChild(cp);
+      // scale factor from tissue-thumbnail-pixels to mini-map pixels
+      const sx=mw/tit.w, sy=mh/tit.h;
+      // place the full thumbnail so its tissue sub-rect lands on [mx,my,mw,mh]
+      const iw=tit.thumb*sx, ih=tit.thumb*sy;
+      const ix=mx - tit.x*sx, iy=my - tit.y*sy;
+      const timg=el("image",{href:S.thumb,x:ix,y:iy,width:iw,height:ih,opacity:.4});
+      timg.setAttribute("clip-path",`url(#${clipId})`);
+      mg.appendChild(timg);
+    }
     const ml=el("text",{x:mx+mw/2,y:my-8,fill:"#8b949e","font-size":9,"text-anchor":"middle"});
     ml.textContent="WSI level 0";mg.appendChild(ml);
     const ml2=el("text",{x:mx+mw/2,y:my+mh+13,fill:"#6b7686","font-size":8,"text-anchor":"middle"});
@@ -511,6 +677,8 @@ async function animateFrom(run){
   const cw=L.thumb.s/S.gridC, ch=L.thumb.s/S.gridR;
   for(let i=0;i<run.patches.length;i++){
     const p=run.patches[i];const ps=p._ps;
+    const tkey=p.row+"_"+p.col;
+    const isAdded=S._fadeInKeys&&S._fadeInKeys.has(tkey);
     const from={x:L.thumb.x+p.col*cw+cw/2,y:L.thumb.y+p.row*ch+ch/2};
     // red block on WSI map + red connector thumbnail→WSI
     let wsiCentre=null;
@@ -520,13 +688,15 @@ async function animateFrom(run){
       const rw=Math.max(3,ww/mini.W*mini.w), rh=Math.max(3,wh/mini.H*mini.h);
       wsiCentre={x:rx+rw/2,y:ry+rh/2, right:rx+rw};
       const box=el("rect",{x:rx,y:ry,width:rw,height:rh,fill:"#e11d1d",
-        "fill-opacity":.35,stroke:"#e11d1d","stroke-width":1.5});
+        "fill-opacity":.35,stroke:"#e11d1d","stroke-width":1.5,"data-tile":tkey});
       svg.appendChild(box);
-      fadeIn(box,1,{duration:250});
+      if(isAdded){box.setAttribute("opacity","0");box.animate([{opacity:0},{opacity:1}],{duration:400,delay:200,fill:"forwards"});}
+      else fadeIn(box,1,{duration:250});
       const rconn=el("path",{d:`M${from.x},${from.y} C${from.x+80},${from.y} ${wsiCentre.x-70},${wsiCentre.y} ${wsiCentre.x},${wsiCentre.y}`,
-        fill:"none",stroke:"#e11d1d","stroke-width":1.3,"stroke-dasharray":"4 3"});
+        fill:"none",stroke:"#e11d1d","stroke-width":1.3,"stroke-dasharray":"4 3","data-tile":tkey});
       svg.appendChild(rconn);
-      if(INSTANT)rconn.setAttribute("opacity",".3");
+      if(isAdded){rconn.setAttribute("opacity","0");rconn.animate([{opacity:0},{opacity:.3}],{duration:400,delay:200,fill:"forwards"});}
+      else if(INSTANT)rconn.setAttribute("opacity",".3");
       else{rconn.animate([{opacity:0},{opacity:.8}],{duration:300,fill:"forwards"});
         rconn.animate([{opacity:.8},{opacity:.3}],{duration:600,delay:400,fill:"forwards"});}
       if(!INSTANT)await sleep(run.patches.length>6?70:180);
@@ -536,17 +706,20 @@ async function animateFrom(run){
     // to its resampled high-res patch. Red = thumbnail→WSI, blue = WSI→patch.
     const src=wsiCentre?{x:wsiCentre.right,y:wsiCentre.y}:{x:mini?mini.x+mini.w:from.x,y:from.y};
     const d=`M${src.x},${src.y} C${src.x+70},${src.y} ${to.x-70},${to.y} ${to.x},${to.y}`;
-    const path=el("path",{d,fill:"none",stroke:"#3b82f6","stroke-width":1.5,opacity:.75});
+    const path=el("path",{d,fill:"none",stroke:"#3b82f6","stroke-width":1.5,opacity:.75,"data-tile":tkey});
     svg.appendChild(path);
     const len=path.getTotalLength();
     path.style.strokeDasharray=len;
-    if(INSTANT){path.style.strokeDashoffset=0;path.setAttribute("opacity",".3");}
+    if(isAdded){path.style.strokeDashoffset=0;path.setAttribute("opacity","0");
+      path.animate([{opacity:0},{opacity:.3}],{duration:400,delay:300,fill:"forwards"});}
+    else if(INSTANT){path.style.strokeDashoffset=0;path.setAttribute("opacity",".3");}
     else{path.style.strokeDashoffset=len;
       path.animate([{strokeDashoffset:len},{strokeDashoffset:0}],{duration:500,fill:"forwards"});
       path.animate([{opacity:.75},{opacity:.3}],{duration:700,delay:500,fill:"forwards"});}
     if(!INSTANT)await sleep(run.patches.length>6?100:280);
     // high-res patch appears
-    const g=el("g");g.setAttribute("opacity",INSTANT?"1":"0");g.style.cursor="pointer";svg.appendChild(g);
+    const g=el("g");g.setAttribute("data-tile",tkey);g.style.cursor="pointer";svg.appendChild(g);
+    g.setAttribute("opacity",(INSTANT&&!isAdded)?"1":"0");
     g.appendChild(el("image",{href:p.patch,x:p._px,y:p._py,width:ps,height:ps,rx:5}));
     g.appendChild(el("rect",{x:p._px,y:p._py,width:ps,height:ps,rx:5,fill:"none",
       stroke:"#3b82f6","stroke-width":1.6}));
@@ -555,18 +728,21 @@ async function animateFrom(run){
       const occNow=S.lastRun&&S.lastRun.occl?S.lastRun.occl[p.row+"_"+p.col]:null;
       openInspect(p,(S.lastRun&&S.lastRun.B)||run.B,occNow);
     });
-    if(!INSTANT)g.animate([{opacity:0},{opacity:1}],{duration:350,fill:"forwards"});
+    if(isAdded)g.animate([{opacity:0},{opacity:1}],{duration:450,delay:350,fill:"forwards"});
+    else if(!INSTANT)g.animate([{opacity:0},{opacity:1}],{duration:350,fill:"forwards"});
     if(!INSTANT)await sleep(run.patches.length>6?80:220);
     // occlusion overlay if on
     if(S.occl&&run.occl[p.row+"_"+p.col]){
       const occ=run.occl[p.row+"_"+p.col];
       const og=occ.grid?occ.grid[0]:8;      // occlusion grid from backend
       const cellp=ps/og;
+      const revealOcc=isAdded||S._occlRevealOnly;
       for(let r=0;r<og;r++)for(let c=0;c<og;c++){
         const v=occ.importance_grid[r][c];
         const rect=el("rect",{x:p._px+c*cellp,y:p._py+r*cellp,width:cellp,height:cellp,
-          fill:heat(v),opacity:INSTANT?0.5:0});g.appendChild(rect);
-        if(!INSTANT)rect.animate([{opacity:0},{opacity:.5}],{duration:300,fill:"forwards",delay:(r*og+c)*2});
+          fill:heat(v),opacity:(INSTANT&&!revealOcc)?0.5:0});g.appendChild(rect);
+        if(revealOcc)rect.animate([{opacity:0},{opacity:.5}],{duration:350,delay:(isAdded?400:0)+(r*og+c)*2,fill:"forwards"});
+        else if(!INSTANT)rect.animate([{opacity:0},{opacity:.5}],{duration:300,fill:"forwards",delay:(r*og+c)*2});
       }
       // outline the top-1 occlusion cell and show the level-0 cellular zoom inset
       if(occ.top_cell){
@@ -653,9 +829,9 @@ async function animateFrom(run){
 // display-only toggles: re-render the last run instantly (INSTANT skips the
 // timed sleeps, so the pipeline redraws in one frame with the new options).
 function renderStatic(){
-  if(!S.lastRun)return;
+  if(!S.lastRun)return Promise.resolve();
   INSTANT=true;
-  animateFrom(S.lastRun).finally(()=>{INSTANT=false;});
+  return animateFrom(S.lastRun).finally(()=>{INSTANT=false;});
 }
 
 function heat(v){ // 0..1 -> blue->yellow->red (RdYlBu_r-ish)
@@ -723,6 +899,93 @@ function openInspect(p,B,occ){
 function closeInspect(){$("inspect").classList.add("hidden");}
 document.addEventListener("keydown",e=>{if(e.key==="Escape")closeInspect();});
 
+// ---- batch processing ----
+let batchCfg={input:null,output:null};
+$("btnBatchIn").onclick=async()=>{
+  $("batchInStatus").innerHTML='<span class="spinner"></span>choosing…';
+  try{const b=await API("browse_folder",{});
+    if(b.folder){batchCfg.input=b.folder;
+      $("batchInStatus").innerHTML=`✓ ${b.folder.split(/[\\/]/).pop()}`;}
+    else $("batchInStatus").textContent="cancelled";
+  }catch(e){const f=prompt("Input folder with WSIs:");if(f){batchCfg.input=f;$("batchInStatus").textContent="✓ set";}}
+  updateBatchRun();
+};
+$("btnBatchOut").onclick=async()=>{
+  $("batchOutStatus").innerHTML='<span class="spinner"></span>choosing…';
+  try{const b=await API("browse_output",{});
+    if(b.folder){batchCfg.output=b.folder;
+      $("batchOutStatus").innerHTML=`✓ a folder <b>{id}_GS_batchrun</b> will be created in ${b.folder.split(/[\\/]/).pop()}`;}
+    else $("batchOutStatus").textContent="cancelled";
+  }catch(e){const f=prompt("Output location:");if(f){batchCfg.output=f;$("batchOutStatus").textContent="✓ set";}}
+  updateBatchRun();
+};
+function updateBatchRun(){$("btnBatchRun").disabled=!(batchCfg.input&&batchCfg.output);}
+
+$("btnBatchRun").onclick=async()=>{
+  if(!batchCfg.input||!batchCfg.output)return;
+  $("btnBatchRun").disabled=true;
+  $("batchStatus").innerHTML='<span class="spinner"></span>processing… this runs the full pipeline on every slide and may take a while';
+  showBusy("Batch processing… (see sidebar)");
+  try{
+    const r=await API("batch",{input_folder:batchCfg.input,output_location:batchCfg.output,
+      archA:S.archA,archB:S.archB,percentile:+$("pct").value,occlusion:S.occl});
+    hideBusy();
+    const ok=r.index.slides.filter(s=>s.status==="ok").length;
+    $("batchStatus").innerHTML=`✓ ${ok}/${r.index.n_slides} slides → ${r.run_dir.split(/[\\/]/).pop()}`;
+    showBatchTable(r.index,r.run_dir);
+  }catch(e){hideBusy();$("batchStatus").textContent="✕ "+e.message;}
+  $("btnBatchRun").disabled=false;
+};
+
+$("btnBatchOpen").onclick=async()=>{
+  $("batchOpenStatus").innerHTML='<span class="spinner"></span>choosing…';
+  let folder="";
+  try{const b=await API("browse_folder",{});folder=b.folder;}
+  catch(e){folder=prompt("Path to a *_GS_batchrun folder:")||"";}
+  if(!folder){$("batchOpenStatus").textContent="cancelled";return;}
+  try{const idx=await API("batch_index",{folder});
+    $("batchOpenStatus").textContent="✓ opened";
+    showBatchTable(idx,folder);
+  }catch(e){$("batchOpenStatus").textContent="✕ "+e.message;}
+};
+
+function showBatchTable(index,runDir){
+  $("batchTitle").textContent=`Batch run ${index.run_id}`;
+  $("batchMeta").textContent=`${index.n_slides} slides · models A:${index.archA} B:${index.archB} · p${index.percentile} · ${index.created}`;
+  const wrap=$("batchTable");wrap.innerHTML="";
+  const tbl=document.createElement("table");
+  tbl.style.cssText="width:100%;border-collapse:collapse;font-size:12px";
+  tbl.innerHTML=`<tr style="text-align:left;color:var(--mut)">
+    <th style="padding:6px 8px">#</th><th style="padding:6px 8px">slide</th>
+    <th style="padding:6px 8px">grade</th><th style="padding:6px 8px">subtype</th>
+    <th style="padding:6px 8px">diagnosis</th><th style="padding:6px 8px">conf</th>
+    <th></th></tr>`;
+  index.slides.forEach(e=>{
+    const tr=document.createElement("tr");
+    tr.style.cssText="border-top:1px solid var(--line)";
+    if(e.status!=="ok"){
+      tr.innerHTML=`<td style="padding:6px 8px">${e.index}</td>
+        <td style="padding:6px 8px">${e.slide_id}</td>
+        <td colspan="5" style="padding:6px 8px;color:var(--bad)">error: ${e.error||""}</td>`;
+    }else{
+      tr.innerHTML=`<td style="padding:6px 8px">${e.index}</td>
+        <td style="padding:6px 8px">${e.slide_id}</td>
+        <td style="padding:6px 8px">${(e.grade||"").replace("_"," ")}</td>
+        <td style="padding:6px 8px">${(e.subtype||"").replace("IDH_","IDH-").replace("_"," ")}</td>
+        <td style="padding:6px 8px">${e.diagnosis||""}</td>
+        <td style="padding:6px 8px">${e.confidence!=null?e.confidence:""}</td>
+        <td style="padding:6px 8px"><button class="sec" style="width:auto;margin:0;padding:4px 10px;font-size:11px">▶ View</button></td>`;
+      tr.querySelector("button").onclick=async()=>{
+        $("batchPanel").classList.add("hidden");
+        await loadFolder(e.folder);
+      };
+    }
+    tbl.appendChild(tr);
+  });
+  wrap.appendChild(tbl);
+  $("batchPanel").classList.remove("hidden");
+}
+
 // ---- load previous result ----
 $("btnLoad").onclick=async()=>{
   $("loadStatus").innerHTML='<span class="spinner"></span>choosing folder…';
@@ -730,16 +993,20 @@ $("btnLoad").onclick=async()=>{
   try{const b=await API("browse_folder",{});folder=b.folder;}catch(e){
     folder=prompt("Path to a GS_ analysis folder:")||"";}
   if(!folder){$("loadStatus").textContent="cancelled";return;}
+  await loadFolder(folder);
+};
+
+async function loadFolder(folder){
   $("loadStatus").innerHTML='<span class="spinner"></span>loading…';
   try{
     const d=await API("load",{folder});
-    // reconstruct the run shape the animation expects
     S.thumb=d.thumbnail;S.thumbW=d.thumbnail_w;S.thumbH=d.thumbnail_h;
     S.wsiDim=d.wsi_level0_dim;S.gridR=d.grid[0];S.gridC=d.grid[1];
+    S.tissueInThumb=d.tissue_in_thumb||null;
     S.session=null;                      // loaded, not a live session
     const run={
       A:{grade_pred:d.stage_a?.grade_pred||"",confidence:d.stage_a?.confidence||0},
-      R:{risk_grid:d.risk_grid,selected:d.selected,percentile:95,
+      R:{risk_grid:d.risk_grid,selected:d.selected,percentile:d.percentile||95,
          grid_rows:d.grid[0],grid_cols:d.grid[1],n_selected:d.patches.length,
          wsi_level0_dim:d.wsi_level0_dim},
       patches:d.patches.map(p=>({row:p.row,col:p.col,risk:p.risk,tissue:p.tissue,
@@ -752,13 +1019,13 @@ $("btnLoad").onclick=async()=>{
       I:{integrated_diagnosis:d.integrated?.diagnosis||"—",
          integrated_confidence:d.integrated?.confidence||0},
     };
-    S.lastRun=run;S.selected=d.selected;
+    S.lastRun=run;S.selected=d.selected;S.occl=false;$("tOccl").classList.remove("on");
     $("btnSave").disabled=true;$("btnReplay").disabled=false;
     $("loadStatus").innerHTML=`✓ loaded ${d.slide_id}<br>`+
       `<span style="color:var(--mut)">${d.folder.split(/[\\/]/).pop()}</span>`;
     await animateFrom(run);
   }catch(e){$("loadStatus").textContent="✕ "+e.message;}
-};
+}
 
 // ---- save ----
 $("btnSave").onclick=async()=>{
