@@ -73,6 +73,11 @@ CHECKPOINTS = {
     },
 }
 CONTROL_IMAGE = r"C:\Users\TAbde\PycharmProjects\Glioma-SPARSE\data\included\control\86242943-7775-11eb-827d-001a7dda7111.jpg"
+
+# preset example slide for the "Methodology explained" walkthrough: a real GBM
+# case, run through the actual pipeline (RN50/RN50, p95, occlusion on) so the
+# walkthrough shows genuine model output identical to Run full pipeline.
+METHODOLOGY_TARGET = r"C:\Users\TAbde\Documents\EMC_postdoc\Virtual_Biopsy\data\WSI_ebrains\WHO2021_data\oligo_IDHmt_1p19qdel_G3\oligo_IDHmt_1p19qdel_G3\a198054a-357f-11eb-bac3-001a7dda7111.ndpi"
 LOGO_PATH = r"C:\Users\TAbde\PycharmProjects\Glioma-SPARSE\docs\logo.png"
 
 GRADE_CLASSES = ["control", "low_grade", "high_grade"]
@@ -308,6 +313,19 @@ def _abbrev(stem):
     return head if len(head) >= 6 else stem[:12]
 
 
+def _safe_slide_folder_name(stem):
+    """Short, collision-safe folder name for a slide's results, e.g.
+    GS_TCGA-HT-7611_a3f9c1d2. Using the full slide stem (as a first attempt at
+    avoiding TCGA collisions) made paths exceed Windows' 260-char MAX_PATH once
+    nested under a deep input tree, since TCGA stems already embed a long GUID.
+    A short abbreviation plus a hash of the FULL stem keeps the folder name
+    short while still being unique per slide (the hash, not the abbreviation,
+    guarantees no two different slides collide)."""
+    import hashlib
+    h = hashlib.md5(stem.encode("utf-8")).hexdigest()[:8]
+    return f"GS_{_abbrev(stem)}_{h}"[:64]
+
+
 def _tissue_in_thumb(mapping):
     """Rectangle (in thumbnail pixels) where real tissue sits, excluding the
     padding that create_wsi_thumbnail added to square the image. Lets the WSI
@@ -339,10 +357,14 @@ def api_import(req: ImportReq):
         target_mpp=TARGET_MPP, output_size=THUMB_SIZE)
     mapping = load_mapping(thumb_path)
 
-    # planned (not yet created) analysis folder alongside the slide
-    gs_dir = slide_path.parent / f"GS_{_abbrev(slide_path.stem)}"
-
     sid = uuid.uuid4().hex[:12]
+
+    # planned (not yet created) analysis folder alongside the slide.
+    # Naming order matches batch: descriptor first, unique ID last
+    # (GS_<slide-abbrev>_<uniqueID>), so repeated saves of the same slide never
+    # collide with or overwrite an earlier save.
+    gs_dir = slide_path.parent / f"GS_{_abbrev(slide_path.stem)}_{sid[:8]}"
+
     SESSIONS[sid] = {
         "slide_path": str(slide_path),
         "slide_id": slide_path.stem,
@@ -443,6 +465,7 @@ def api_risk_map(req: RiskReq):
     cand.sort(key=lambda d: -d["risk"])
     selected = cand if req.cap <= 0 else cand[:req.cap]
     s["selected"] = selected
+    s["percentile"] = req.percentile
 
     # normalised grid for heatmap rendering
     rm = risk_map
@@ -622,9 +645,13 @@ def api_save(req: SaveReq):
     return {"saved": saved, "report": xlsx}
 
 
-def _save_session_folder(s, gs):
+def _save_session_folder(s, gs, save_patches=True):
     """Write the full analysis folder (figures, report, session.json) for a
-    session into gs. Shared by single-slide save and batch processing."""
+    session into gs. Shared by single-slide save and batch processing.
+    save_patches=False skips writing the full-resolution 2048x2048 patch JPGs
+    (used for large batch runs to save disk and time); everything else
+    (risk map figure, occlusion, report, session.json for reload) is
+    unaffected."""
     fig_dir = gs / "figures"; rep_dir = gs / "report"
     fig_dir.mkdir(parents=True, exist_ok=True); rep_dir.mkdir(parents=True, exist_ok=True)
     saved = []
@@ -664,10 +691,11 @@ def _save_session_folder(s, gs):
                      f"{s['results'].get('stage_a',{}).get('grade_pred','')}")
         save_fig(fig, "stageA_riskmap.jpg")
 
-    for (r, c), patch in s["patches"].items():
-        p = fig_dir / f"patch_r{r}c{c}.jpg"
-        patch.resize((2048, 2048), Image.BICUBIC).save(p, quality=90)
-        saved.append(str(p))
+    if save_patches:
+        for (r, c), patch in s["patches"].items():
+            p = fig_dir / f"patch_r{r}c{c}.jpg"
+            patch.resize((2048, 2048), Image.BICUBIC).save(p, quality=90)
+            saved.append(str(p))
 
     for (r, c), imp in s.get("occlusion", {}).items():
         patch = s["patches"][(r, c)]
@@ -686,12 +714,15 @@ def _save_session_folder(s, gs):
     for (r, c), info in s.get("occl_top", {}).items():
         rank = sel_rank.get((r, c), 0)
         sr, sc = info["cell"]
-        name = (f"stageB_{s['slide_id']}_rank{rank:02d}_r{r}c{c}"
-                f"_top1_r{sr}c{sc}_zoom.jpg")
+        # the slide_id is intentionally NOT repeated here: this file already
+        # lives inside that slide's own folder, and including a full TCGA stem
+        # (which embeds a long GUID) pushed some paths past Windows' 260-char
+        # MAX_PATH once nested under a deep input tree.
+        name = f"stageB_rank{rank:02d}_r{r}c{c}_top1_r{sr}c{sc}_zoom.jpg"
         info["zoom"].resize((2048, 2048), Image.BICUBIC).save(fig_dir / name, quality=90)
         saved.append(str(fig_dir / name))
 
-    xlsx_path = rep_dir / f"{s['slide_id']}_report.xlsx"
+    xlsx_path = rep_dir / "report.xlsx"
     _write_xlsx(xlsx_path, s)
     saved.append(str(xlsx_path))
 
@@ -718,13 +749,12 @@ def _save_session_folder(s, gs):
         if occ_top is not None:
             rank = sel_rank.get((r, c), 0)
             sr, sc = occ_top["cell"]
-            zoom_file = (f"stageB_{s['slide_id']}_rank{rank:02d}_r{r}c{c}"
-                         f"_top1_r{sr}c{sc}_zoom.jpg")
+            zoom_file = f"stageB_rank{rank:02d}_r{r}c{c}_top1_r{sr}c{sc}_zoom.jpg"
         patch_records.append({
             "row": r, "col": c,
             "risk": sel.get("risk"), "tissue": sel.get("tissue"),
             "wsi_bbox": list(bbox) if bbox else None,
-            "patch_file": f"patch_r{r}c{c}.jpg",
+            "patch_file": (f"patch_r{r}c{c}.jpg" if save_patches else None),
             "occl_grid": occ_grid,
             "occl_top": ({"cell": list(occ_top["cell"]),
                           "importance": occ_top["importance"],
@@ -740,12 +770,16 @@ def _save_session_folder(s, gs):
         "resample_ratio": (round(s["mapping"].target_mpp / s["mapping"].base_mpp, 3)
                            if s["mapping"].has_wsi_mapping() else None),
         "risk_grid": grid_or_none("risk_map"),
+        "percentile": s.get("percentile"),
+        "archA": s["results"].get("stage_a", {}).get("arch"),
+        "archB": s["results"].get("stage_b", {}).get("arch"),
         "selected": s.get("selected", []),
         "patches": patch_records,
         "stage_a": s["results"].get("stage_a"),
         "stage_b": s["results"].get("stage_b"),
         "integrated": s["results"].get("integrated"),
         "thumbnail_file": Path(s["thumb_path"]).name,
+        "patches_saved": save_patches,
     }
     (gs / "session.json").write_text(json.dumps(session_json, indent=2, default=str))
     saved.append(str(gs / "session.json"))
@@ -801,8 +835,8 @@ def api_load(req: LoadReq):
     fig = folder / "figures"
     patches = []
     for pr in data.get("patches", []):
-        pf = fig / pr["patch_file"]
-        rec = {**pr, "patch": load_jpg_b64(pf)}
+        pf = fig / pr["patch_file"] if pr.get("patch_file") else None
+        rec = {**pr, "patch": load_jpg_b64(pf) if pf else None}
         # load the top-cell zoom image if occlusion was computed for this patch
         ot = pr.get("occl_top")
         if ot and ot.get("zoom_file"):
@@ -821,6 +855,9 @@ def api_load(req: LoadReq):
         "risk_grid": data.get("risk_grid"),
         "tissue_in_thumb": data.get("tissue_in_thumb"),
         "occlusion_available": data.get("occlusion_available", False),
+        "patches_saved": data.get("patches_saved", True),
+        "percentile": data.get("percentile"),
+        "archA": data.get("archA"), "archB": data.get("archB"),
         "selected": data.get("selected", []),
         "patches": patches,
         "stage_a": data.get("stage_a"),
@@ -840,11 +877,18 @@ class BatchReq(BaseModel):
     archB: str = "resnet50"
     percentile: float = 95.0
     occlusion: bool = False
+    recursive: bool = False
+    save_patches: bool = True
 
 
-def _process_slide_headless(slide_path, archA, archB, percentile, occlusion):
+def _process_slide_headless(slide_path, archA, archB, percentile, occlusion,
+                             on_thumbnail=None, on_riskmap=None):
     """Run the full pipeline on one slide with no HTTP session, returning a
-    session-like dict ready for _save_session_folder."""
+    session-like dict ready for _save_session_folder.
+
+    on_thumbnail(thumbnail) and on_riskmap(thumbnail, risk_map) are optional
+    callbacks fired as soon as those cheap artifacts exist, so a caller (batch
+    processing) can show a live preview without waiting for Stage B."""
     import tempfile
     tmp_dir = Path(tempfile.mkdtemp(prefix="gs_batch_"))
     thumb_path = tmp_dir / f"{slide_path.stem}.jpg"
@@ -852,6 +896,8 @@ def _process_slide_headless(slide_path, archA, archB, percentile, occlusion):
         slide_path, output_path=str(thumb_path),
         target_mpp=TARGET_MPP, output_size=THUMB_SIZE)
     mapping = load_mapping(thumb_path)
+    if on_thumbnail:
+        on_thumbnail(thumbnail)
     s = {"slide_path": str(slide_path), "slide_id": slide_path.stem,
          "thumb_path": str(thumb_path), "thumbnail": thumbnail, "mapping": mapping,
          "patches": {}, "patch_bbox": {}, "occlusion": {}, "occl_top": {},
@@ -875,6 +921,8 @@ def _process_slide_headless(slide_path, archA, archB, percentile, occlusion):
         transform=_transform, grid=GRID, target_class=predA,
         device=DEVICE, control_shuffle_seed=SEED, score="logit")
     s["risk_map"] = risk_map
+    if on_riskmap:
+        on_riskmap(thumbnail, risk_map)
     thresh = float(np.percentile(risk_map.flatten(), percentile))
     cand = []
     for r in range(GRID[0]):
@@ -887,6 +935,7 @@ def _process_slide_headless(slide_path, archA, archB, percentile, occlusion):
                                  "tissue": round(tf, 2)})
     cand.sort(key=lambda d: -d["risk"])
     s["selected"] = cand
+    s["percentile"] = percentile
 
     # extract + Stage B
     mB = get_model("stage_b", archB)
@@ -945,6 +994,167 @@ def _process_slide_headless(slide_path, archA, archB, percentile, occlusion):
     return s
 
 
+# ============================================================
+# METHODOLOGY WALKTHROUGH  (real pipeline on a preset example)
+# ============================================================
+
+def _permuted_control(seed=SEED, grid=GRID):
+    """Reproduce the exact permuted control the risk map uses. Returns
+    (control_square_img, permuted_img, permuted_tiles_list, order)."""
+    ctrl = control_img()
+    ctrl_sq = ctrl.resize((THUMB_SIZE, THUMB_SIZE), Image.BILINEAR)
+    tiles = list(tile_image(ctrl_sq, grid))
+    rng = np.random.default_rng(seed)
+    order = rng.permutation(len(tiles))
+    permuted = [tiles[i] for i in order]
+    perm_img = reconstruct_image(permuted, grid, ctrl_sq.size)
+    return ctrl_sq, perm_img, permuted, order
+
+
+METHOD_CACHE_DIR = HERE / "methodology_cache"
+
+
+def _injection_demo(thumbnail, model, target_class, top_cells, grid=GRID, seed=SEED):
+    """Show the ACTUAL patch injection: for each of a few high-signal target
+    tiles, replace one tile of the permuted control with that target tile and
+    record how the model's target-class logit changes. Returns the base
+    (no-injection) logit and a list of per-injection frames with before/after
+    images and logits."""
+    ctrl_sq, perm_img, permuted_tiles, _ = _permuted_control(seed, grid)
+    rows, cols = grid
+    # baseline: permuted control alone
+    _, base_logits = forward_probs(model, perm_img)
+    base_logit = float(base_logits[target_class])
+
+    target_tiles = list(tile_image(thumbnail, grid))
+    frames = []
+    # inject into a fixed, visually central control slot so the eye can follow it
+    slot = (rows // 2) * cols + (cols // 2)
+    for (r, c) in top_cells[:4]:
+        tgt_tile = target_tiles[r * cols + c]
+        injected = list(permuted_tiles)
+        injected[slot] = tgt_tile
+        inj_img = reconstruct_image(injected, grid, ctrl_sq.size)
+        _, inj_logits = forward_probs(model, inj_img)
+        inj_logit = float(inj_logits[target_class])
+        frames.append({
+            "row": int(r), "col": int(c),
+            "slot_row": slot // cols, "slot_col": slot % cols,
+            "injected_img": b64(inj_img),
+            "target_tile": b64(tgt_tile.resize((256, 256), Image.BILINEAR)),
+            "logit": round(inj_logit, 3),
+            "delta": round(inj_logit - base_logit, 3),
+        })
+    return {
+        "permuted_img": b64(perm_img),
+        "base_logit": round(base_logit, 3),
+        "slot_row": slot // cols, "slot_col": slot % cols,
+        "frames": frames,
+    }
+
+
+def _compute_methodology(save_dir):
+    """Run the entire methodology pipeline ONCE on the preset slide and return a
+    fully self-contained dict (all images as b64, all params). Also writes it to
+    save_dir/methodology_cache.json so subsequent opens load instantly."""
+    target = Path(METHODOLOGY_TARGET)
+    if not target.exists():
+        raise HTTPException(400, f"preset example slide not found: {target}")
+
+    import tempfile
+    tmp_dir = Path(tempfile.mkdtemp(prefix="gs_method_"))
+    thumb_path = tmp_dir / f"{target.stem}.jpg"
+    thumbnail, _, _ = create_wsi_thumbnail(
+        target, output_path=str(thumb_path), target_mpp=TARGET_MPP, output_size=THUMB_SIZE)
+    mapping = load_mapping(thumb_path)
+
+    # real pipeline (RN50/RN50, p95, occlusion on) via the shared headless runner
+    s = _process_slide_headless(target, "resnet50", "resnet50",
+                                percentile=95.0, occlusion=True)
+
+    mA = get_model("stage_a", "resnet50")
+    rm = s["risk_map"]
+    norm = (rm - rm.min()) / (np.ptp(rm) + 1e-8)
+
+    # ordered high-signal cells for the injection demo
+    flat = [(rm[r, c], r, c) for r in range(GRID[0]) for c in range(GRID[1])]
+    flat.sort(key=lambda t: -t[0])
+    top_cells = [(r, c) for _, r, c in flat]
+    injection = _injection_demo(s["thumbnail"], mA, s["stage_a"]["pred_idx"], top_cells)
+
+    # extracted patches + per-patch probs + occlusion
+    mB = get_model("stage_b", "resnet50")
+    patches = []
+    for sel in s["selected"]:
+        r, c = sel["row"], sel["col"]
+        patch = s["patches"].get((r, c))
+        if patch is None:
+            continue
+        pv, _ = forward_probs(mB, patch)
+        occ = s["occlusion"].get((r, c))
+        occ_top = s["occl_top"].get((r, c))
+        patches.append({
+            "row": r, "col": c, "risk": sel.get("risk"), "tissue": sel.get("tissue"),
+            "patch": b64(patch),
+            "wsi_bbox": list(s["patch_bbox"].get((r, c))) if s["patch_bbox"].get((r, c)) else None,
+            "probs": {"IDH_mt": round(float(pv[0]), 3),
+                      "IDH_mt_1p19q": round(float(pv[1]), 3),
+                      "IDH_wt": round(float(pv[2]), 3)},
+            "pred": SUBTYPE_CLASSES[int(np.argmax(pv))],
+            "occl_grid": ([[round(float(x), 3) for x in row]
+                           for row in ((occ - occ.min()) / (np.ptp(occ) + 1e-8))]
+                          if occ is not None else None),
+            "occl_top": ({"cell": list(occ_top["cell"]), "zoom": b64(occ_top["zoom"])}
+                         if occ_top else None),
+        })
+
+    ctrl_sq, _, _, _ = _permuted_control()
+    payload = {
+        "slide_id": target.stem,
+        "target_thumb": b64(s["thumbnail"]),
+        "thumbnail_w": s["thumbnail"].size[0], "thumbnail_h": s["thumbnail"].size[1],
+        "control_orig": b64(ctrl_sq), "control_permuted": injection["permuted_img"],
+        "grid": list(GRID),
+        "risk_grid": [[round(float(v), 3) for v in row] for row in norm],
+        "raw_grid": [[round(float(v), 2) for v in row] for row in rm],
+        "selected": s["selected"],
+        "injection": injection,
+        "patches": patches,
+        "stage_a": s["results"].get("stage_a"),
+        "stage_b": s["results"].get("stage_b"),
+        "integrated": s["results"].get("integrated"),
+        "percentile": 95.0, "archA": "resnet50", "archB": "resnet50",
+    }
+
+    save_dir.mkdir(parents=True, exist_ok=True)
+    (save_dir / "methodology_cache.json").write_text(json.dumps(payload))
+    return payload
+
+
+@app.post("/api/methodology")
+def api_methodology():
+    """Return the fully-precomputed methodology walkthrough. Computes once
+    (real pipeline + real injection demo) and caches to disk; every later call
+    loads the cache instantly, so the walkthrough never recomputes."""
+    cache = METHOD_CACHE_DIR / "methodology_cache.json"
+    if cache.exists():
+        try:
+            return json.loads(cache.read_text())
+        except Exception:
+            pass   # corrupt cache -> recompute
+    return _compute_methodology(METHOD_CACHE_DIR)
+
+
+@app.post("/api/methodology_rebuild")
+def api_methodology_rebuild():
+    """Force a recompute of the methodology cache (e.g. after changing the
+    preset slide or the models)."""
+    cache = METHOD_CACHE_DIR / "methodology_cache.json"
+    if cache.exists():
+        cache.unlink()
+    return _compute_methodology(METHOD_CACHE_DIR)
+
+
 @app.post("/api/browse_output")
 def api_browse_output():
     try:
@@ -958,33 +1168,81 @@ def api_browse_output():
         raise HTTPException(400, f"native dialog unavailable ({e}); type the path")
 
 
-BATCH_PROGRESS = {}   # run_id -> {total, done, current, ok, errors, finished, run_dir, index}
+BATCH_PROGRESS = {}   # run_id -> {total, done, current, ok, errors, finished, run_dir, index, updates}
+
+PREVIEW_SIZE = 112   # small + cheap: no extra inference, just a resize + colormap lookup
+
+
+def _preview_thumb(thumbnail):
+    im = thumbnail.resize((PREVIEW_SIZE, PREVIEW_SIZE), Image.BILINEAR)
+    buf = io.BytesIO(); im.save(buf, format="JPEG", quality=60)
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+def _preview_overlay(thumbnail, risk_map):
+    """Cheap signal-map preview: colormap lookup + nearest-neighbour upscale,
+    no matplotlib figure rendering (that would be too slow over hundreds of
+    slides)."""
+    import matplotlib
+    norm = (risk_map - risk_map.min()) / (np.ptp(risk_map) + 1e-8)
+    try:
+        cmap = matplotlib.colormaps["RdYlBu_r"]      # matplotlib >= 3.7
+    except AttributeError:
+        import matplotlib.cm as mcm
+        cmap = mcm.get_cmap("RdYlBu_r")              # older matplotlib
+    colors = (cmap(norm)[..., :3] * 255).astype(np.uint8)
+    heat = Image.fromarray(colors).resize((PREVIEW_SIZE, PREVIEW_SIZE), Image.NEAREST)
+    base = thumbnail.resize((PREVIEW_SIZE, PREVIEW_SIZE), Image.BILINEAR).convert("RGB")
+    blended = Image.blend(base, heat, alpha=0.45)
+    buf = io.BytesIO(); blended.save(buf, format="JPEG", quality=60)
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
 def _run_batch(run_id, slides, run_dir, req):
     prog = BATCH_PROGRESS[run_id]
+
+    def emit(ev):
+        prog["updates"].append(ev)
+
     index = {"run_id": run_id, "created": time.strftime("%Y-%m-%d %H:%M:%S"),
              "input_folder": req.input_folder, "archA": req.archA, "archB": req.archB,
              "percentile": req.percentile, "occlusion": req.occlusion,
+             "save_patches": req.save_patches,
              "n_slides": len(slides), "slides": []}
     for i, sp in enumerate(slides):
         prog["current"] = sp.stem
         prog["done"] = i
+        emit({"i": i, "slide_id": sp.stem, "field": "start"})
         entry = {"slide_id": sp.stem, "index": i + 1, "status": "ok"}
         try:
-            s = _process_slide_headless(sp, req.archA, req.archB,
-                                        req.percentile, req.occlusion)
-            gs = run_dir / f"GS_{_abbrev(sp.stem)}"
-            _save_session_folder(s, gs)
+            s = _process_slide_headless(
+                sp, req.archA, req.archB, req.percentile, req.occlusion,
+                on_thumbnail=lambda th, i=i: emit(
+                    {"i": i, "field": "thumb", "value": _preview_thumb(th)}),
+                on_riskmap=lambda th, rm, i=i: emit(
+                    {"i": i, "field": "overlay", "value": _preview_overlay(th, rm)}))
+            # short + collision-safe folder name: a full TCGA stem repeated
+            # here AND inside the zoom filename pushed paths past Windows'
+            # 260-char MAX_PATH under deep input trees. The hash guarantees
+            # uniqueness without needing the full (long) stem.
+            base = _safe_slide_folder_name(sp.stem)
+            gs = run_dir / base
+            k = 2
+            while gs.exists():
+                gs = run_dir / f"{base}_{k}"; k += 1
+            _save_session_folder(s, gs, save_patches=req.save_patches)
             entry["folder"] = str(gs)
             entry["diagnosis"] = s["results"].get("integrated", {}).get("diagnosis", "")
             entry["grade"] = s["results"].get("stage_a", {}).get("grade_pred", "")
             entry["subtype"] = s["results"].get("stage_b", {}).get("subtype_pred", "")
             entry["confidence"] = s["results"].get("integrated", {}).get("confidence", "")
             prog["ok"] += 1
+            emit({"i": i, "field": "status", "value": "done", "folder": str(gs),
+                  "diagnosis": entry["diagnosis"]})
         except Exception as e:
             entry["status"] = "error"; entry["error"] = str(e)
             prog["errors"] += 1
+            emit({"i": i, "field": "status", "value": "error", "error": str(e)})
         index["slides"].append(entry)
         prog["done"] = i + 1
     (run_dir / "batch_index.json").write_text(json.dumps(index, indent=2, default=str))
@@ -1003,36 +1261,51 @@ def api_batch(req: BatchReq):
     if not out_root.is_dir():
         raise HTTPException(400, f"output location not found: {out_root}")
 
-    slides = sorted([p for p in inp.iterdir()
-                     if p.suffix.lower() in SUPPORTED_EXTS_BATCH])
+    if req.recursive:
+        slides = sorted([p for p in inp.rglob("*")
+                         if p.suffix.lower() in SUPPORTED_EXTS_BATCH])
+    else:
+        slides = sorted([p for p in inp.iterdir()
+                         if p.suffix.lower() in SUPPORTED_EXTS_BATCH])
     if not slides:
         raise HTTPException(400, f"no WSIs in {inp}")
 
     run_id = uuid.uuid4().hex[:8]
-    run_dir = out_root / f"{run_id}_GS_batchrun"
+    run_dir = out_root / f"GS_batchrun_{run_id}"
     run_dir.mkdir(parents=True, exist_ok=False)
 
     BATCH_PROGRESS[run_id] = {
         "total": len(slides), "done": 0, "current": None,
         "ok": 0, "errors": 0, "finished": False,
-        "run_dir": str(run_dir), "index": None}
+        "run_dir": str(run_dir), "index": None, "updates": []}
 
     import threading
     t = threading.Thread(target=_run_batch, args=(run_id, slides, run_dir, req),
                          daemon=True)
     t.start()
-    # return immediately; frontend polls /api/batch_progress
+    # return immediately; frontend polls /api/batch_progress with a cursor
     return {"run_id": run_id, "run_dir": str(run_dir), "total": len(slides),
             "started": True}
 
 
+class BatchProgressReq(BaseModel):
+    run_id: str
+    cursor: int = 0
+
+
 @app.post("/api/batch_progress")
-def api_batch_progress(req: LoadReq):
-    """req.folder carries the run_id here."""
-    p = BATCH_PROGRESS.get(req.folder)
+def api_batch_progress(req: BatchProgressReq):
+    """Returns only the update events since `cursor` (append-only log), so
+    repeated polling over hundreds of slides stays cheap: unchanged/finished
+    slides are never re-sent."""
+    p = BATCH_PROGRESS.get(req.run_id)
     if p is None:
         raise HTTPException(404, "unknown run_id")
-    return p
+    updates = p["updates"][req.cursor:]
+    return {"total": p["total"], "done": p["done"], "current": p["current"],
+            "ok": p["ok"], "errors": p["errors"], "finished": p["finished"],
+            "run_dir": p["run_dir"], "index": p["index"],
+            "updates": updates, "next_cursor": len(p["updates"])}
 
 
 @app.post("/api/batch_index")
