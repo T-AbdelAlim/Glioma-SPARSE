@@ -33,13 +33,25 @@ import json
 @dataclass
 class ThumbMapping:
     wsi_path: str
-    wsi_level0_dim: List[int]                # [W0, H0]
+    wsi_level0_dim: List[int]                # [W0, H0] - the TRUE full-slide
+                                              # level-0 dimensions, always,
+                                              # regardless of whether a crop
+                                              # was used (see wsi_crop_origin)
     base_mpp: Optional[float]
     target_mpp: Optional[float]
     tissue_image_dim: List[int]              # [Wt, Ht]
     canvas_size: int                         # S = max(Wt, Ht)
     tissue_offset_in_canvas: List[int]       # [off_x, off_y]
     thumbnail_size: int                      # T (typically 2048)
+    # Additive field. [0, 0] (the default) reproduces the exact original
+    # behavior: tissue_image_dim was read starting at WSI level-0 (0, 0), as
+    # create_wsi_thumbnail always does for .svs/.ndpi/etc. A non-zero value
+    # means the region was cropped starting at this level-0 pixel location
+    # BEFORE resampling (the .mrxs tissue-crop fix), so it must be added back
+    # after the tissue-image-local -> WSI transform to recover true absolute
+    # WSI level-0 coordinates. Old sidecars (no such key) load with [0, 0]
+    # via .get(), so every existing .svs/.ndpi thumbnail needs no changes.
+    wsi_crop_origin: List[int] = field(default_factory=lambda: [0, 0])
 
     def has_wsi_mapping(self):
         return self.base_mpp is not None and self.target_mpp is not None
@@ -80,6 +92,7 @@ def load_mapping(thumbnail_path):
         canvas_size=int(data["canvas_size"]),
         tissue_offset_in_canvas=list(data["tissue_offset_in_canvas"]),
         thumbnail_size=int(data["thumbnail_size"]),
+        wsi_crop_origin=list(data.get("wsi_crop_origin", [0, 0])),
     )
 
 
@@ -130,14 +143,23 @@ def thumbnail_bbox_to_wsi(mapping, bbox_thumb):
     if tx_r <= tx_l or ty_b <= ty_t:
         return None
 
-    # Step 4: tissue -> WSI level 0
+    # Step 4: tissue -> WSI level 0 (still relative to wherever the read
+    # started - (0,0) for the original code, or a crop origin for a
+    # tissue-cropped .mrxs thumbnail)
     r = mapping.target_mpp / mapping.base_mpp
     wx = int(round(tx_l * r))
     wy = int(round(ty_t * r))
     ww = int(round((tx_r - tx_l) * r))
     wh = int(round((ty_b - ty_t) * r))
 
-    # Final safety clamp to level-0 bounds
+    # Step 5: add back the crop origin to get TRUE absolute WSI level-0
+    # coordinates. [0, 0] for the original (uncropped) code path, a no-op.
+    off_x0, off_y0 = mapping.wsi_crop_origin
+    wx += off_x0
+    wy += off_y0
+
+    # Final safety clamp to level-0 bounds (always the TRUE full-slide
+    # dimensions, regardless of whether a crop was used)
     W0, H0 = mapping.wsi_level0_dim
     wx = max(0, min(wx, W0 - 1))
     wy = max(0, min(wy, H0 - 1))

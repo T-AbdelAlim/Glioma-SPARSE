@@ -1,4 +1,4 @@
-\r"""
+r"""
 End-to-end Glioma-SPARSE inference: Stage A grade + Stage B molecular subtype.
 
 Input is a single WSI or a folder of WSIs (.ndpi, .svs, .mrxs). For each slide:

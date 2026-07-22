@@ -44,7 +44,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 # ---- real pipeline imports (same as inference_report.py) ----
-from glioma_sparse.preprocessing.create_wsi_thumbnail import create_wsi_thumbnail
+from glioma_sparse.preprocessing.thumbnail_auto import create_wsi_thumbnail_auto as create_wsi_thumbnail
 from glioma_sparse.data_utils.transforms import build_eval_transform
 from glioma_sparse.models.factory import build_model
 from glioma_sparse.interpret.patch_injection import (
@@ -340,6 +340,24 @@ def _tissue_in_thumb(mapping):
             "thumb": int(T)}
 
 
+def _wsi_crop_extent(mapping):
+    """The level-0 pixel size of the region that was actually read (the crop,
+    for .mrxs; the full slide, for anything else where wsi_crop_origin is
+    [0,0]). The dashboard's WSI mini-map displays THIS region (stretched to
+    fill the mini-map box, via _tissue_in_thumb's clip), not the full slide,
+    so marker positions must be normalized against this extent and the crop
+    origin, not against the full wsi_level0_dim - otherwise a marker's
+    position is computed correctly in absolute WSI coordinates but placed
+    wrongly on a mini-map that only shows the cropped sub-region. Returns
+    None if there's no WSI mapping (e.g. missing mpp), matching
+    has_wsi_mapping()'s convention elsewhere."""
+    if not mapping.has_wsi_mapping():
+        return None
+    r = mapping.target_mpp / mapping.base_mpp
+    Wt, Ht = mapping.tissue_image_dim
+    return [round(Wt * r), round(Ht * r)]
+
+
 @app.post("/api/import")
 def api_import(req: ImportReq):
     import tempfile
@@ -387,6 +405,8 @@ def api_import(req: ImportReq):
         "thumbnail_w": thumbnail.size[0],
         "thumbnail_h": thumbnail.size[1],
         "wsi_level0_dim": mapping.wsi_level0_dim,
+        "wsi_crop_origin": mapping.wsi_crop_origin,
+        "wsi_crop_extent": _wsi_crop_extent(mapping),
         "tissue_fraction": round(float(tissue_frac), 4),
         "has_wsi_mapping": mapping.has_wsi_mapping(),
         "tissue_in_thumb": _tissue_in_thumb(mapping),
@@ -501,6 +521,8 @@ def api_extract(req: ExtractReq):
                                               mapping.thumbnail_size)),
             "wsi_bbox": [wx, wy, ww, wh],
             "wsi_level0_dim": mapping.wsi_level0_dim,
+            "wsi_crop_origin": mapping.wsi_crop_origin,
+            "wsi_crop_extent": _wsi_crop_extent(mapping),
             "resample_ratio": round(mapping.target_mpp / mapping.base_mpp, 2)
                 if mapping.has_wsi_mapping() else None,
             "output_size": OUTPUT_SIZE,
@@ -519,6 +541,12 @@ def api_extract(req: ExtractReq):
         slide.close()
     if patch.size != (OUTPUT_SIZE, OUTPUT_SIZE):
         patch = patch.resize((OUTPUT_SIZE, OUTPUT_SIZE), Image.BICUBIC)
+    if Path(mapping.wsi_path).suffix.lower() == ".mrxs":
+        from glioma_sparse.preprocessing.mrxs_tissue_crop import mask_black_artifacts
+        patch, artifact_frac = mask_black_artifacts(patch)
+        if artifact_frac > 0:
+            print(f"[api_extract] r{req.row}c{req.col}: cleaned "
+                  f"{artifact_frac*100:.1f}% black scan-artifact pixels")
     s["patches"][(req.row, req.col)] = patch
     s.setdefault("patch_bbox", {})[(req.row, req.col)] = (wx, wy, ww, wh)
     return {
@@ -526,6 +554,8 @@ def api_extract(req: ExtractReq):
         "bbox_thumb": list(bbox_thumb),
         "wsi_bbox": [wx, wy, ww, wh],
         "wsi_level0_dim": mapping.wsi_level0_dim,
+        "wsi_crop_origin": mapping.wsi_crop_origin,
+        "wsi_crop_extent": _wsi_crop_extent(mapping),
         "resample_ratio": round(mapping.target_mpp / mapping.base_mpp, 2)
             if mapping.has_wsi_mapping() else None,
         "output_size": OUTPUT_SIZE,
@@ -602,6 +632,17 @@ def api_occlusion(req: OcclReq):
         tw, th = patch.size[0] // GRID[1], patch.size[1] // GRID[0]
         zoom = patch.crop((tc*tw, tr*th, tc*tw+tw, tr*th+th)).resize(
             (OUTPUT_SIZE, OUTPUT_SIZE), Image.BICUBIC)
+
+    # this zoom is an INDEPENDENT level-0 re-read (extract_subtile above), not
+    # derived from s["patches"], so it never went through the artifact
+    # cleaning applied at extraction time - same .mrxs gate, same fix.
+    if Path(s["mapping"].wsi_path).suffix.lower() == ".mrxs":
+        from glioma_sparse.preprocessing.mrxs_tissue_crop import mask_black_artifacts
+        zoom, artifact_frac = mask_black_artifacts(zoom)
+        if artifact_frac > 0:
+            print(f"[api_occlusion] r{req.row}c{req.col} zoom: cleaned "
+                  f"{artifact_frac*100:.1f}% black scan-artifact pixels")
+
     s.setdefault("occl_top", {})[(req.row, req.col)] = {
         "zoom": zoom, "cell": (int(tr), int(tc)), "importance": round(float(tv), 2),
         "parent": (req.row, req.col)}
@@ -766,6 +807,8 @@ def _save_session_folder(s, gs, save_patches=True):
         "device": DEVICE, "grid": list(GRID),
         "thumbnail_w": s["thumbnail"].size[0], "thumbnail_h": s["thumbnail"].size[1],
         "wsi_level0_dim": s["mapping"].wsi_level0_dim,
+        "wsi_crop_origin": s["mapping"].wsi_crop_origin,
+        "wsi_crop_extent": _wsi_crop_extent(s["mapping"]),
         "tissue_in_thumb": _tissue_in_thumb(s["mapping"]),
         "resample_ratio": (round(s["mapping"].target_mpp / s["mapping"].base_mpp, 3)
                            if s["mapping"].has_wsi_mapping() else None),
@@ -850,6 +893,8 @@ def api_load(req: LoadReq):
         "thumbnail": thumb_b64,
         "thumbnail_w": data.get("thumbnail_w"), "thumbnail_h": data.get("thumbnail_h"),
         "wsi_level0_dim": data.get("wsi_level0_dim"),
+        "wsi_crop_origin": data.get("wsi_crop_origin", [0, 0]),
+        "wsi_crop_extent": data.get("wsi_crop_extent"),
         "resample_ratio": data.get("resample_ratio"),
         "grid": data.get("grid", [8, 8]),
         "risk_grid": data.get("risk_grid"),
@@ -952,6 +997,12 @@ def _process_slide_headless(slide_path, archA, archB, percentile, occlusion,
             patch = slide.read_region((wx, wy), 0, (ww, wh)).convert("RGB")
             if patch.size != (OUTPUT_SIZE, OUTPUT_SIZE):
                 patch = patch.resize((OUTPUT_SIZE, OUTPUT_SIZE), Image.BICUBIC)
+            if Path(slide_path).suffix.lower() == ".mrxs":
+                from glioma_sparse.preprocessing.mrxs_tissue_crop import mask_black_artifacts
+                patch, artifact_frac = mask_black_artifacts(patch)
+                if artifact_frac > 0:
+                    print(f"[_process_slide_headless] r{sel['row']}c{sel['col']}: "
+                          f"cleaned {artifact_frac*100:.1f}% black scan-artifact pixels")
             s["patches"][(sel["row"], sel["col"])] = patch
             s["patch_bbox"][(sel["row"], sel["col"])] = (wx, wy, ww, wh)
             pv, _ = forward_probs(mB, patch)
@@ -968,6 +1019,12 @@ def _process_slide_headless(slide_path, archA, archB, percentile, occlusion,
                     tw, th = patch.size[0]//GRID[1], patch.size[1]//GRID[0]
                     zoom = patch.crop((tc*tw, tr*th, tc*tw+tw, tr*th+th)).resize(
                         (OUTPUT_SIZE, OUTPUT_SIZE), Image.BICUBIC)
+                if Path(slide_path).suffix.lower() == ".mrxs":
+                    from glioma_sparse.preprocessing.mrxs_tissue_crop import mask_black_artifacts
+                    zoom, artifact_frac = mask_black_artifacts(zoom)
+                    if artifact_frac > 0:
+                        print(f"[_process_slide_headless] r{sel['row']}c{sel['col']} zoom: "
+                              f"cleaned {artifact_frac*100:.1f}% black scan-artifact pixels")
                 s["occl_top"][(sel["row"], sel["col"])] = {
                     "zoom": zoom, "cell": (int(tr), int(tc)),
                     "importance": round(float(tv), 2)}
