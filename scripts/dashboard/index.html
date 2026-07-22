@@ -521,6 +521,8 @@ $("btnImport").onclick=async()=>{
     S.session=r.session_id;S.thumb=r.thumbnail;S.thumbSize=r.thumbnail_size;
     S.thumbW=r.thumbnail_w||r.thumbnail_size;S.thumbH=r.thumbnail_h||r.thumbnail_size;
     S.wsiDim=r.wsi_level0_dim||null;
+    S.wsiCropOrigin=r.wsi_crop_origin||[0,0];
+    S.wsiCropExtent=r.wsi_crop_extent||r.wsi_level0_dim||null;
     S.tissueInThumb=r.tissue_in_thumb||null;
     S.selected=[];S.risk=null;S.lastRun=null;
     hideBatchLive();
@@ -743,12 +745,21 @@ function tileRect(sel,color,cls=""){
 }
 
 // ---- full animation ----
+let ANIM_RUN=0;   // guards against overlapping animateFrom calls (e.g. a
+                  // stale Replay click racing a just-finished pipeline run)
+                  // corrupting each other's SVG mid-draw, since each call
+                  // starts with svg.innerHTML="" - without this, two
+                  // concurrent calls interleave their drawing into the same
+                  // SVG, which can show elements (and labels) from two
+                  // different `run` objects at once.
 async function animateFrom(run){
+  ANIM_RUN++;const _tok=ANIM_RUN;
   const svg=$("stage");svg.innerHTML="";
   // 1. thumbnail
   svg.appendChild(el("image",{href:S.thumb,x:L.thumb.x,y:L.thumb.y,
     width:L.thumb.s,height:L.thumb.s}));
   label(svg,L.thumb.x,L.thumb.y-12,`Thumbnail · ${S.thumbW}×${S.thumbH} px · 4.0 µm/px`);
+  if(_tok!==ANIM_RUN)return;
   // 2. grade prediction card
   const gclass=run.A.grade_pred;
   if(S.pred){
@@ -764,6 +775,7 @@ async function animateFrom(run){
     if(!INSTANT)g.animate([{opacity:0},{opacity:1}],{duration:400,fill:"forwards"});
   }
   await sleep(400);
+  if(_tok!==ANIM_RUN)return;
   // 3. signal map overlay (heat cells) + highlight selected
   if(S.signal){
     const cw=L.thumb.s/S.gridC, ch=L.thumb.s/S.gridR;
@@ -778,6 +790,7 @@ async function animateFrom(run){
       `Stage A signal map · patch-injection · ${ARCH_LABEL[S.archA]}`);
     await sleep(700);
   }
+  if(_tok!==ANIM_RUN)return;
   // 4. highlight selected tiles, sequential
   for(const sel of run.selected||run.R.selected){
     const rr=tileRect(sel,"#e11d1d");svg.appendChild(rr);
@@ -785,6 +798,7 @@ async function animateFrom(run){
     if(!INSTANT)await sleep(120);
   }
   await sleep(200);
+  if(_tok!==ANIM_RUN)return;
   // 5. per-patch: line from tile -> high-res patch -> into Stage B
   const lay=patchLayout(run.patches.length);
   run.patches.forEach((p,i)=>{
@@ -798,12 +812,19 @@ async function animateFrom(run){
   // location on the WSI; blue connectors run each WSI location → its resampled
   // high-res patch. This makes the coordinate transform explicit.
   const wsi=S.wsiDim||run.R.wsi_level0_dim||(run.patches[0]&&run.patches[0].wsi_level0_dim);
+  // The mini-map displays the CROPPED tissue region (via the tissueInThumb
+  // clip below), not the full slide - so its sizing/aspect and the marker
+  // math both need the crop's own extent and origin, not the full slide's.
+  // For non-.mrxs slides wsiCropOrigin is [0,0] and wsiCropExtent equals the
+  // full slide dims, so this is a no-op there (same behavior as before).
+  const cropOrigin=S.wsiCropOrigin||(run.patches[0]&&run.patches[0].wsi_crop_origin)||[0,0];
+  const cropExtent=S.wsiCropExtent||(run.patches[0]&&run.patches[0].wsi_crop_extent)||wsi;
   let mini=null;
   if(wsi&&run.patches.length){
-    const aspect=wsi[1]/wsi[0];
+    const aspect=cropExtent[1]/cropExtent[0];
     const mw=L.wsiMap.w, mh=Math.round(mw*aspect);
     const mx=L.wsiMap.x, my=L.wsiMap.y+Math.max(0,(L.thumb.s-mh)/2);
-    mini={x:mx,y:my,w:mw,h:mh,W:wsi[0],H:wsi[1]};
+    mini={x:mx,y:my,w:mw,h:mh,W:cropExtent[0],H:cropExtent[1]};
     const mg=el("g");mg.setAttribute("opacity",INSTANT?"1":"0");svg.appendChild(mg);
     mg.appendChild(el("rect",{x:mx,y:my,width:mw,height:mh,rx:4,fill:"#0b0e13",
       stroke:"#2a323d","stroke-width":1.5}));
@@ -843,7 +864,13 @@ async function animateFrom(run){
     // red block on WSI map + red connector thumbnail→WSI
     let wsiCentre=null;
     if(mini&&p.wsi_bbox){
-      const [wx,wy,ww,wh]=p.wsi_bbox;
+      const [wxAbs,wyAbs,ww,wh]=p.wsi_bbox;
+      // p.wsi_bbox is in ABSOLUTE WSI level-0 coordinates; the mini-map only
+      // spans the cropped tissue region, so subtract the crop's own origin
+      // before normalizing against its extent (mini.W/H). Without this, a
+      // correct absolute coordinate lands in the wrong place on a mini-map
+      // that only shows a sub-region of the full slide.
+      const wx=wxAbs-cropOrigin[0], wy=wyAbs-cropOrigin[1];
       const rx=mini.x+wx/mini.W*mini.w, ry=mini.y+wy/mini.H*mini.h;
       const rw=Math.max(3,ww/mini.W*mini.w), rh=Math.max(3,wh/mini.H*mini.h);
       wsiCentre={x:rx+rw/2,y:ry+rh/2, right:rx+rw};
@@ -926,6 +953,7 @@ async function animateFrom(run){
     }
   }
   await sleep(300);
+  if(_tok!==ANIM_RUN)return;
   // 6. Stage B box + flow lines from patches into it
   const sb=L.stageB;
   const box=el("g");box.setAttribute("opacity",INSTANT?"1":"0");svg.appendChild(box);
@@ -963,6 +991,7 @@ async function animateFrom(run){
       path.animate([{strokeDashoffset:len},{strokeDashoffset:0}],{duration:450,fill:"forwards"});}
   }
   if(!INSTANT)await sleep(500);
+  if(_tok!==ANIM_RUN)return;
   // 7. Stage B prediction bars + subtype pill
   if(S.pred){
     const by=sb.y+sb.h+34;
@@ -979,6 +1008,7 @@ async function animateFrom(run){
       c.textContent="confidence "+run.B.confidence.toFixed(2);svg.appendChild(c);}
   }
   await sleep(400);
+  if(_tok!==ANIM_RUN)return;
   // 8. integrated diagnosis
   $("dxText").textContent=run.I.integrated_diagnosis;
   $("dxText").animate([{opacity:0,transform:"translateY(8px)"},{opacity:1,transform:"translateY(0)"}],
@@ -1290,6 +1320,8 @@ async function loadFolder(folder,fromBatch=false){
     const d=await API("load",{folder});
     S.thumb=d.thumbnail;S.thumbW=d.thumbnail_w;S.thumbH=d.thumbnail_h;
     S.wsiDim=d.wsi_level0_dim;S.gridR=d.grid[0];S.gridC=d.grid[1];
+    S.wsiCropOrigin=d.wsi_crop_origin||[0,0];
+    S.wsiCropExtent=d.wsi_crop_extent||d.wsi_level0_dim||null;
     S.tissueInThumb=d.tissue_in_thumb||null;
     S.session=null;                      // loaded, not a live session
     const run={
