@@ -9,6 +9,9 @@ thumbnail tile).
 
 Tiles whose thumbnail content is mostly padding/background are filtered
 out before ranking, so that white-padding artefacts cannot win the top-k.
+
+Optionally re-stains each patch (Macenko, see preprocessing.stain_normalization)
+against a named profile's Stage-B reference; stain_profile=None is a no-op.
 """
 
 from pathlib import Path
@@ -21,6 +24,7 @@ from glioma_sparse.interpret.wsi_mapping import (
     thumbnail_bbox_to_wsi,
     grid_cell_bbox,
 )
+from glioma_sparse.preprocessing.stain_normalization import normalize_with_profile
 
 
 # ============================================================
@@ -61,6 +65,7 @@ def extract_topk_patches(
     min_tissue_fraction=0.5,
     slide_id=None,
     label=None,
+    stain_profile=None,
 ):
     """
     Extract the top-k highest-risk tiles from the WSI at high resolution.
@@ -76,6 +81,8 @@ def extract_topk_patches(
                              are excluded from selection (prevents picking padding)
         slide_id: identifier used in output filenames; defaults to thumbnail stem
         label: optional class label embedded in the filename (for Stage B labelling)
+        stain_profile: name of a fitted profile (see stain_normalization.list_profiles())
+                       to normalize each patch against; None applies no correction
 
     Returns:
         list of dicts, one per extracted patch, with keys:
@@ -146,6 +153,11 @@ def extract_topk_patches(
             # Standardise output size
             if patch.size != (output_size, output_size):
                 patch = patch.resize((output_size, output_size), Image.BICUBIC)
+
+            # Stain normalization (named profile's Stage-B reference, if given)
+            if stain_profile:
+                patch = Image.fromarray(
+                    normalize_with_profile(np.array(patch), stain_profile, stage="B"))
 
             # Save
             label_part = "_{}".format(label) if label is not None else ""

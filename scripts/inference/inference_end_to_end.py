@@ -61,7 +61,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from glioma_sparse.preprocessing.create_wsi_thumbnail import create_wsi_thumbnail
+from glioma_sparse.preprocessing.thumbnail_auto import create_wsi_thumbnail_auto as create_wsi_thumbnail
+from glioma_sparse.preprocessing.stain_normalization import normalize_with_profile
 from glioma_sparse.data_utils.transforms import build_eval_transform
 from glioma_sparse.models.factory import build_model
 from glioma_sparse.interpret.patch_injection import (
@@ -109,6 +110,9 @@ CONFIG = {
     "target_mpp": 4.0,
     "thumb_size": 2048,
     "output_size": 2048,
+
+    # named Macenko stain profile, see preprocessing.stain_normalization; None = no correction
+    "stain_profile": None,
 
     # Stage B occlusion risk map + cellular zoom
     "stage_b_riskmap": True,
@@ -219,7 +223,15 @@ def _tissue_fraction(thumbnail, row, col, grid):
     return float(mask.sum()) / float(mask.size)
 
 
-def extract_highres(slide, mapping, row, col, grid, out_size):
+def normalize_stage_b_patch(patch, stain_profile=None):
+    """Re-stain a Stage-B high-res patch against a named profile's Stage-B
+    reference. See glioma_sparse.preprocessing.stain_normalization."""
+    if not stain_profile:
+        return patch
+    return Image.fromarray(normalize_with_profile(np.array(patch), stain_profile, stage="B"))
+
+
+def extract_highres(slide, mapping, row, col, grid, out_size, stain_profile=None):
     bbox_thumb = grid_cell_bbox(row, col, grid[0], grid[1], mapping.thumbnail_size)
     wsi_bbox = thumbnail_bbox_to_wsi(mapping, bbox_thumb)
     if wsi_bbox is None:
@@ -228,6 +240,7 @@ def extract_highres(slide, mapping, row, col, grid, out_size):
     patch = slide.read_region((wx, wy), 0, (ww, wh)).convert("RGB")
     if patch.size != (out_size, out_size):
         patch = patch.resize((out_size, out_size), Image.BICUBIC)
+    patch = normalize_stage_b_patch(patch, stain_profile=stain_profile)
     return patch, wsi_bbox
 
 
@@ -337,7 +350,8 @@ def run_slide(thumb_source, model_a, model_b, transform, control_img, args,
     if generate_thumb:
         thumb_path = slide_dir / f"{slide_id}.jpg"
         create_wsi_thumbnail(wsi_path, output_path=str(thumb_path),
-                             target_mpp=args.target_mpp, output_size=args.thumb_size)
+                             target_mpp=args.target_mpp, output_size=args.thumb_size,
+                             stain_profile=args.stain_profile)
     thumbnail = Image.open(thumb_path).convert("RGB")
 
     # 2. Stage A grade + risk map
@@ -385,7 +399,8 @@ def run_slide(thumb_source, model_a, model_b, transform, control_img, args,
     try:
         for rank, sel in enumerate(selected, 1):
             patch, patch_bbox = extract_highres(slide, mapping, sel["row"],
-                                                sel["col"], GRID, args.output_size)
+                                                sel["col"], GRID, args.output_size,
+                                                stain_profile=args.stain_profile)
             if patch is None:
                 continue
             tag = f"{slide_id}_rank{rank:02d}_r{sel['row']}c{sel['col']}"
@@ -669,6 +684,82 @@ def _true_labels(sc_thumb):
     return {"grade_class": "unknown", "mutation": "unknown"}
 
 
+def _labels_from_folder_name(folder):
+    """Same keyword logic as _true_labels(), applied to one folder name."""
+    folder = folder.lower()
+    if "gbm" in folder or "idhwt" in folder:
+        return {"grade_class": "high", "mutation": "IDH_wt"}
+    if "oligo" in folder and "1p19q" in folder:
+        return {"grade_class": "low" if "_g2" in folder else "high",
+                "mutation": "IDH_mt_1p19q"}
+    if "astro" in folder and "idhmt" in folder:
+        return {"grade_class": "low" if "_g2" in folder else "high",
+                "mutation": "IDH_mt"}
+    return None
+
+
+def _true_labels_from_ancestor(wsi_path):
+    """Walk up ancestor folder names (depth-agnostic across datasets) until
+    one matches a known subtype-keyword pattern; unknown if none do."""
+    for ancestor in Path(wsi_path).parents:
+        labels = _labels_from_folder_name(ancestor.name)
+        if labels is not None:
+            return labels
+    return {"grade_class": "unknown", "mutation": "unknown"}
+
+
+def run_external(args):
+    """Score a labeled external cohort against ground truth inferred from its
+    folder structure, using one given checkpoint pair (no per-fold globbing,
+    since external slides aren't held out per fold)."""
+    transform = build_eval_transform()
+    control_img = Image.open(_rel(args.control_image)).convert("RGB")
+    model_a = load_model(_rel(args.stage_a_ckpt), args.model, len(GRADE_CLASSES), args.device)
+    model_b = load_model(_rel(args.stage_b_ckpt), args.model, len(SUBTYPE_CLASSES), args.device)
+    run_dir = RESULTS_ROOT / args.run_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    input_root = _rel(args.input)
+    slides = sorted(p for p in input_root.rglob("*")
+                    if p.suffix.lower() in WSI_EXTS and "excluded" not in
+                    {a.name.lower() for a in p.parents})
+    if args.slide_list:
+        wanted = {line.strip() for line in open(_rel(args.slide_list)) if line.strip()}
+        before = len(slides)
+        slides = [p for p in slides if str(p) in wanted]
+        print(f"[external] --slide-list filtered {before} -> {len(slides)} slides "
+             f"({len(wanted)} paths listed in {_rel(args.slide_list)})")
+    print(f"[external] {len(slides)} slides found under {input_root} "
+         f"(checkpoint_label={args.checkpoint_label}, stain_profile={args.stain_profile})")
+
+    all_rows = []
+    n_unknown = 0
+    for i, wsi in enumerate(slides, 1):
+        true = _true_labels_from_ancestor(wsi)
+        if true["grade_class"] == "unknown":
+            n_unknown += 1
+            print(f"  [{i}/{len(slides)}] SKIP (no subtype folder matched): {wsi}")
+            continue
+        stem = wsi.stem
+        try:
+            res, _ = run_slide(wsi, model_a, model_b, transform, control_img, args,
+                               run_dir / abbrev(stem), wsi_path=str(wsi), generate_thumb=True)
+            res["fold"] = args.checkpoint_label
+            res.update(score_row(true, res))
+            all_rows.append(res)
+            print(f"  [{i}/{len(slides)}] {stem}: true={true['grade_class']}/{true['mutation']} "
+                 f"pred={res['grade_class']}/{res.get('subtype_pred','NA')} "
+                 f"e2e_correct={res.get('end_to_end_correct')}")
+        except Exception as e:
+            print(f"  [{i}/{len(slides)}] FAILED {stem}: {e}")
+
+    if n_unknown:
+        print(f"\n[external] {n_unknown} slide(s) skipped: no ancestor folder matched a known "
+             f"subtype pattern -- check these manually, they are NOT included in the report.")
+    _write_testset_outputs(all_rows, run_dir)
+    print(f"\nExternal report: {run_dir / 'e2e_testset_report.xlsx'}")
+
+
 # ============================================================
 # AGGREGATION
 # ============================================================
@@ -758,6 +849,22 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--testset", action="store_true",
                    default=(c["run_mode"] == "testset"))
+    p.add_argument("--external", action="store_true", default=False,
+                   help="score a labeled external cohort (e.g. TCGA/Radboud) against "
+                       "ground truth inferred from its subtype folder names, using a "
+                       "single given --stage-a-ckpt/--stage-b-ckpt (no fold globbing: "
+                       "external data isn't held out per fold, run once per checkpoint "
+                       "pair you want to cover and combine the reports afterward)")
+    p.add_argument("--checkpoint-label", default="fold1",
+                   help='tags every row of an --external run (e.g. "fold1") so multiple '
+                       "runs against different checkpoint pairs can be concatenated and "
+                       "aggregated the same way internal fold results are")
+    p.add_argument("--slide-list", default=None,
+                   help="--external mode: path to a text file of absolute WSI paths (one per "
+                       "line), restricting the scan under --input to just those slides -- e.g. "
+                       "a resection-only subset resolved by "
+                       "scripts.analysis.resolve_radboud_resection_list. Omit to process every "
+                       "WSI found under --input.")
     p.add_argument("--run-name", default=c["run_name"])
     p.add_argument("--input", default=c["input"])
     p.add_argument("--model", default=c["model"])
@@ -775,8 +882,19 @@ def parse_args():
     p.add_argument("--target-mpp", type=float, default=c["target_mpp"])
     p.add_argument("--thumb-size", type=int, default=c["thumb_size"])
     p.add_argument("--output-size", type=int, default=c["output_size"])
+    p.add_argument("--stain-profile", dest="stain_profile", default=c["stain_profile"],
+                   help='name of a fitted stain profile to normalize against, e.g. '
+                       '"RD-mrxs" or "TCGA-Glioma" (see glioma_sparse.preprocessing.'
+                       'stain_normalization.list_profiles()); omit for no correction')
     p.add_argument("--stage-b-riskmap", action="store_true",
                    default=c["stage_b_riskmap"])
+    p.add_argument("--no-stage-b-riskmap", dest="stage_b_riskmap", action="store_false",
+                   help="disable the Stage-B occlusion sweep (64 extra Stage-B forward "
+                       "passes per patch) -- it's for interpretability visualization only, "
+                       "not needed for accuracy/AUC evaluation, and dominates runtime on "
+                       "large batches. The default (on) has no off-switch otherwise, since "
+                       "CONFIG['stage_b_riskmap'] defaults True and --stage-b-riskmap is a "
+                       "store_true flag.")
     p.add_argument("--occlusion-topk", type=int, default=c["occlusion_topk"])
     p.add_argument("--device", default=c["device"])
     return p.parse_args()
@@ -784,7 +902,9 @@ def parse_args():
 
 def main():
     args = parse_args()
-    if args.testset:
+    if args.external:
+        run_external(args)
+    elif args.testset:
         run_testset(args)
     else:
         run_single_or_folder(args)

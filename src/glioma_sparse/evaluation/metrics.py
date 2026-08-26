@@ -9,9 +9,14 @@ def compute_classification_metrics(probs, labels):
     acc = accuracy_score(labels, preds)
     f1 = f1_score(labels, preds, average="macro")
 
+    n_classes = probs.shape[1]
     try:
-        auc = roc_auc_score(labels, probs, multi_class="ovr")
-    except:
+        if n_classes == 2:
+            # multi_class='ovr' expects >2 classes; binary needs a 1D score
+            auc = roc_auc_score(labels, probs[:, 1])
+        else:
+            auc = roc_auc_score(labels, probs, multi_class="ovr")
+    except ValueError:
         auc = float("nan")
 
     return {

@@ -3,7 +3,6 @@ import time
 import shutil
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
-
 from glioma_sparse.preprocessing.create_wsi_thumbnail import create_wsi_thumbnail
 
 

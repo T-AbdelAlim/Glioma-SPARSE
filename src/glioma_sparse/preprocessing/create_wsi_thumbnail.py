@@ -101,25 +101,35 @@ def estimate_fraction(mask):
 # IMAGE POSTPROCESSING
 # ============================================================
 
+MIN_PLAUSIBLE_BG_CHANNEL = 200  # below this, a colour no longer looks like a light background
+DEFAULT_BG_COLOR = np.array([245, 245, 245], dtype=np.uint8)  # H&E background is near-white
+
+
+def _corner_sampled_bg_color(img_np):
+    corners = np.concatenate([
+        img_np[0:50, 0:50],
+        img_np[0:50, -50:],
+        img_np[-50:, 0:50],
+        img_np[-50:, -50:]
+    ], axis=0).reshape(-1, 3)
+
+    valid = corners[np.any(corners > 10, axis=1)]
+
+    if len(valid) > 0:
+        return np.median(valid, axis=0).astype(np.uint8)
+    return DEFAULT_BG_COLOR.copy()
+
+
 def pad_with_background_color(img, bg_color_hint=None):
     img_np = np.array(img)
 
-    if bg_color_hint is not None:
+    # scanner hint and corner sample can both be wrong (grey instead of
+    # white), so validate either before trusting it, else fall back to default
+    if bg_color_hint is not None and min(bg_color_hint) >= MIN_PLAUSIBLE_BG_CHANNEL:
         bg_color = np.array(bg_color_hint, dtype=np.uint8)
     else:
-        corners = np.concatenate([
-            img_np[0:50, 0:50],
-            img_np[0:50, -50:],
-            img_np[-50:, 0:50],
-            img_np[-50:, -50:]
-        ], axis=0).reshape(-1, 3)
-
-        valid = corners[np.any(corners > 10, axis=1)]
-
-        if len(valid) > 0:
-            bg_color = np.median(valid, axis=0).astype(np.uint8)
-        else:
-            bg_color = np.array([255, 255, 255], dtype=np.uint8)
+        corner_estimate = _corner_sampled_bg_color(img_np)
+        bg_color = corner_estimate if corner_estimate.min() >= MIN_PLAUSIBLE_BG_CHANNEL else DEFAULT_BG_COLOR.copy()
 
     padding_mask = np.all(img_np == 0, axis=-1)
     img_np[padding_mask] = bg_color

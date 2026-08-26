@@ -102,15 +102,21 @@ def plot_confusion_matrix(labels, preds, class_names, out_path, normalize=False)
 def plot_roc_curve(labels, probs, class_names, out_path):
 
     n_classes = len(class_names)
-    labels_bin = label_binarize(labels, classes=list(range(n_classes)))
+    labels = np.asarray(labels)
 
     plt.figure()
 
-    for i in range(n_classes):
-        fpr, tpr, _ = roc_curve(labels_bin[:, i], probs[:, i])
+    if n_classes == 2:
+        # label_binarize collapses binary targets to one column, not two
+        fpr, tpr, _ = roc_curve(labels, probs[:, 1])
         roc_auc = auc(fpr, tpr)
-
-        plt.plot(fpr, tpr, label=f"{class_names[i]} (AUC={roc_auc:.2f})")
+        plt.plot(fpr, tpr, label=f"{class_names[1]} (AUC={roc_auc:.2f})")
+    else:
+        labels_bin = label_binarize(labels, classes=list(range(n_classes)))
+        for i in range(n_classes):
+            fpr, tpr, _ = roc_curve(labels_bin[:, i], probs[:, i])
+            roc_auc = auc(fpr, tpr)
+            plt.plot(fpr, tpr, label=f"{class_names[i]} (AUC={roc_auc:.2f})")
 
     plt.plot([0, 1], [0, 1], linestyle="--")
 

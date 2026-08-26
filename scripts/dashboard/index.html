@@ -153,6 +153,9 @@
         <input type="text" id="slidePath" placeholder="C:\path\to\slide.ndpi" style="flex:1">
         <button id="btnBrowse" class="sec" style="width:auto;margin-top:0;padding:8px 12px;white-space:nowrap">Browse…</button>
       </div>
+      <label class="row" style="margin-top:6px">Stain correction
+        <select id="stainProfileSel" style="flex:1;margin-left:8px"></select>
+      </label>
       <button id="btnImport" disabled>Build thumbnail</button>
       <div class="status" id="importStatus"></div>
     </div>
@@ -325,7 +328,7 @@ const COL={control:"#adcba3",low_grade:"#ffe1a8",high_grade:"#e26d5c",
 const INK={control:"#3a3a2e",low_grade:"#6b4e18",high_grade:"#fff",
   IDH_mt:"#1d3a3d",IDH_mt_1p19q:"#2a3a30",IDH_wt:"#fff"};
 
-let S={session:null,archA:"resnet50",archB:"resnet50",
+let S={session:null,archA:"resnet50",archB:"resnet50",stainProfile:null,
   signal:true,pred:true,raw:false,occl:false,
   thumb:null,thumbSize:2048,thumbW:2048,thumbH:2048,wsiDim:null,tissueInThumb:null,
   gridR:8,gridC:8,
@@ -411,6 +414,24 @@ $("segA").onclick=e=>{if(e.target.dataset.a){S.archA=e.target.dataset.a;
   [...$("segA").children].forEach(b=>b.classList.toggle("on",b.dataset.a===S.archA));}};
 $("segB").onclick=e=>{if(e.target.dataset.b){S.archB=e.target.dataset.b;
   [...$("segB").children].forEach(b=>b.classList.toggle("on",b.dataset.b===S.archB));}};
+
+(async()=>{
+  const sel=$("stainProfileSel");
+  try{
+    const r=await API("stain_profiles",{});
+    for(const p of r.profiles){
+      const opt=document.createElement("option");
+      opt.value=p.id||""; opt.textContent=p.label;
+      opt.title=p.description||"";
+      sel.appendChild(opt);
+    }
+  }catch(e){
+    const opt=document.createElement("option");
+    opt.value=""; opt.textContent="None (no correction)";
+    sel.appendChild(opt);
+  }
+})();
+$("stainProfileSel").onchange=e=>{S.stainProfile=e.target.value||null;};
 $("pct").oninput=e=>{
   $("pctVal").textContent=e.target.value;
   const pct=+e.target.value, ncell=S.gridR*S.gridC;
@@ -517,7 +538,7 @@ $("btnImport").onclick=async()=>{
   $("importStatus").innerHTML='<span class="spinner"></span>building thumbnail…';
   $("btnImport").disabled=true;
   try{
-    const r=await API("import",{slide_path:path});
+    const r=await API("import",{slide_path:path,stain_profile:S.stainProfile});
     S.session=r.session_id;S.thumb=r.thumbnail;S.thumbSize=r.thumbnail_size;
     S.thumbW=r.thumbnail_w||r.thumbnail_size;S.thumbH=r.thumbnail_h||r.thumbnail_size;
     S.wsiDim=r.wsi_level0_dim||null;
@@ -1111,7 +1132,7 @@ $("btnBatchOut").onclick=async()=>{
   $("batchOutStatus").innerHTML='<span class="spinner"></span>choosing…';
   try{const b=await API("browse_output",{});
     if(b.folder){batchCfg.output=b.folder;
-      $("batchOutStatus").innerHTML=`✓ a folder <b>GS_batchrun_{id}</b> will be created in ${b.folder.split(/[\\/]/).pop()}`;}
+      $("batchOutStatus").innerHTML=`✓ a folder <b>GS_batchrun_RN{arch}_{id}</b> will be created in ${b.folder.split(/[\\/]/).pop()}`;}
     else $("batchOutStatus").textContent="cancelled";
   }catch(e){const f=prompt("Output location:");if(f){batchCfg.output=f;$("batchOutStatus").textContent="✓ set";}}
   updateBatchRun();
@@ -1209,7 +1230,7 @@ $("btnBatchRun").onclick=async()=>{
   try{
     const start=await API("batch",{input_folder:batchCfg.input,output_location:batchCfg.output,
       archA:S.archA,archB:S.archB,percentile:+$("pct").value,occlusion:S.occl,
-      recursive:batchCfg.recursive,save_patches:S.savePatches});
+      recursive:batchCfg.recursive,save_patches:S.savePatches,stain_profile:S.stainProfile});
     const runId=start.run_id, total=start.total;
     batchGrid.runId=runId;
     // poll for incremental updates only (cheap even over hundreds of slides:
