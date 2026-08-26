@@ -40,6 +40,10 @@ def parse_args():
                         help="Model name (resnet18, resnet34, resnet50)")
     parser.add_argument("--cohort-dir", type=str, default=None,
                         help="Stage B cohort dir (default data/stage_b_cohort).")
+    parser.add_argument("--only-correct-grade", action="store_true",
+                        help="Drop train/val patches whose slide was mis-graded "
+                             "by Stage A (grade_class_correct==0) before training. "
+                             "Test is left unfiltered.")
     return parser.parse_args()
 
 
@@ -121,12 +125,14 @@ class ManifestPatchDataset(Dataset):
 # UTILITIES
 # ============================================================
 
-def build_experiment_name(model_name, fold):
+def build_experiment_name(model_name, fold, only_correct_grade=False):
     parts = [model_name, "stageB", f"fold{fold}"]
     if USE_OVERSAMPLING:
         parts.append("os")
     if USE_CLASS_WEIGHTED_LOSS:
         parts.append("cw")
+    if only_correct_grade:
+        parts.append("correctgradeonly")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M")
     return f"{timestamp}_{'_'.join(parts)}"
 
@@ -314,7 +320,8 @@ def main():
 
     set_seed(SEED)
 
-    experiment_name = EXPERIMENT_NAME or build_experiment_name(model_name, fold)
+    experiment_name = EXPERIMENT_NAME or build_experiment_name(
+        model_name, fold, args.only_correct_grade)
     out_dir = BASE_OUT_DIR / experiment_name
     out_dir.mkdir(parents=True, exist_ok=True)
     print("Experiment:", experiment_name, "| Device:", DEVICE)
@@ -328,6 +335,18 @@ def main():
     test_rows = split_rows(rows, "test")
     assert train_rows and val_rows and test_rows, \
         "Fold manifest missing one of train/val/test."
+
+    if args.only_correct_grade:
+        # test stays unfiltered so it's comparable to the unfiltered run
+        n_train_before, n_val_before = len(train_rows), len(val_rows)
+        train_rows = [r for r in train_rows if r["grade_class_correct"] == "1"]
+        val_rows = [r for r in val_rows if r["grade_class_correct"] == "1"]
+        print(f"--only-correct-grade: train {n_train_before} -> {len(train_rows)} "
+              f"({n_train_before - len(train_rows)} dropped), "
+              f"val {n_val_before} -> {len(val_rows)} "
+              f"({n_val_before - len(val_rows)} dropped)")
+        assert train_rows and val_rows, \
+            "--only-correct-grade left train or val empty for this fold."
 
     if USE_OVERSAMPLING:
         train_rows = oversample_rows(train_rows)
@@ -406,6 +425,7 @@ def main():
         "use_patch_shuffle": USE_PATCH_SHUFFLE,
         "use_oversampling": USE_OVERSAMPLING,
         "use_class_weighted_loss": USE_CLASS_WEIGHTED_LOSS,
+        "only_correct_grade": args.only_correct_grade,
         "class_weights": class_weights_list,
         "cohort_dir": str(cohort_dir),
         "fold_manifest": str(Path(cohort_dir) / "manifests" / f"stageB_fold{fold}.csv"),
@@ -483,3 +503,4 @@ def main():
 if __name__ == "__main__":
     main()
 #python -m scripts.stage_b.train_stageB --fold 1
+#python -m scripts.stage_b.train_stageB --fold 1 --only-correct-grade

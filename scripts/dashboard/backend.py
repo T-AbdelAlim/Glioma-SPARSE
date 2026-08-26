@@ -31,6 +31,7 @@ from pathlib import Path
 import base64
 import io
 import json
+import re
 import time
 import uuid
 
@@ -45,6 +46,7 @@ from pydantic import BaseModel
 
 # ---- real pipeline imports (same as inference_report.py) ----
 from glioma_sparse.preprocessing.thumbnail_auto import create_wsi_thumbnail_auto as create_wsi_thumbnail
+from glioma_sparse.preprocessing.stain_normalization import normalize_with_profile, list_profiles
 from glioma_sparse.data_utils.transforms import build_eval_transform
 from glioma_sparse.models.factory import build_model
 from glioma_sparse.interpret.patch_injection import (
@@ -88,6 +90,11 @@ TARGET_MPP = 4.0
 THUMB_SIZE = 2048
 OUTPUT_SIZE = 2048
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+# each slide runs in its own subprocess so a malformed .mrxs can't hang/crash the server
+SLIDE_TIMEOUT_SECONDS = 600
+
+DEFAULT_STAIN_PROFILE = None
 
 INTEGRATED = {
     ("low", "IDH_mt"): "Astrocytoma, IDH-mutant, grade 2",
@@ -154,6 +161,14 @@ def grade_class_short(name):
     return {"low_grade": "low", "high_grade": "high"}.get(name, "control")
 
 
+def normalize_stage_b_patch(patch, stain_profile):
+    """Re-stain a Stage-B high-res patch against a named profile's Stage-B
+    reference. stain_profile=None (or falsy) is a no-op passthrough."""
+    if not stain_profile:
+        return patch
+    return Image.fromarray(normalize_with_profile(np.array(patch), stain_profile, stage="B"))
+
+
 # ============================================================
 # OCCLUSION (mirrors inference_end_to_end.occlusion_map)
 # ============================================================
@@ -211,6 +226,7 @@ def sess(sid):
 
 class ImportReq(BaseModel):
     slide_path: str
+    stain_profile: str | None = None
 
 class StageAReq(BaseModel):
     session_id: str
@@ -326,6 +342,19 @@ def _safe_slide_folder_name(stem):
     return f"GS_{_abbrev(stem)}_{h}"[:64]
 
 
+def _arch_num(name):
+    """'resnet18' -> '18', 'resnet50' -> '50'. Falls back to the raw name,
+    uppercased, if it isn't in the resnetNN form (so an unrecognised arch
+    doesn't crash folder naming, just produces a less tidy tag)."""
+    m = re.match(r"resnet(\d+)$", name.strip().lower())
+    return m.group(1) if m else name.strip().upper()
+
+
+def _arch_tag(archA, archB):
+    """e.g. archA='resnet18', archB='resnet50' -> 'RN1850'."""
+    return f"RN{_arch_num(archA)}{_arch_num(archB)}"
+
+
 def _tissue_in_thumb(mapping):
     """Rectangle (in thumbnail pixels) where real tissue sits, excluding the
     padding that create_wsi_thumbnail added to square the image. Lets the WSI
@@ -358,6 +387,15 @@ def _wsi_crop_extent(mapping):
     return [round(Wt * r), round(Ht * r)]
 
 
+@app.post("/api/stain_profiles")
+def api_stain_profiles():
+    """List available stain-normalization profiles for the frontend's picker."""
+    return {"profiles": [{"id": None, "label": "None (no correction)",
+                          "description": "Use for EBRAINS training/test data, or any "
+                                        "dataset with no fitted profile yet."}]
+                        + list_profiles()}
+
+
 @app.post("/api/import")
 def api_import(req: ImportReq):
     import tempfile
@@ -372,7 +410,8 @@ def api_import(req: ImportReq):
     t0 = time.time()
     thumbnail, tissue_frac, eff_frac = create_wsi_thumbnail(
         slide_path, output_path=str(thumb_path),
-        target_mpp=TARGET_MPP, output_size=THUMB_SIZE)
+        target_mpp=TARGET_MPP, output_size=THUMB_SIZE,
+        stain_profile=req.stain_profile)
     mapping = load_mapping(thumb_path)
 
     sid = uuid.uuid4().hex[:12]
@@ -394,6 +433,7 @@ def api_import(req: ImportReq):
         "tissue_fraction": round(float(tissue_frac), 4),
         "patches": {},
         "results": {},
+        "stain_profile": req.stain_profile,
     }
     return {
         "session_id": sid,
@@ -411,6 +451,7 @@ def api_import(req: ImportReq):
         "has_wsi_mapping": mapping.has_wsi_mapping(),
         "tissue_in_thumb": _tissue_in_thumb(mapping),
         "elapsed_sec": round(time.time() - t0, 2),
+        "stain_profile": req.stain_profile,
     }
 
 
@@ -547,6 +588,7 @@ def api_extract(req: ExtractReq):
         if artifact_frac > 0:
             print(f"[api_extract] r{req.row}c{req.col}: cleaned "
                   f"{artifact_frac*100:.1f}% black scan-artifact pixels")
+    patch = normalize_stage_b_patch(patch, s.get("stain_profile"))
     s["patches"][(req.row, req.col)] = patch
     s.setdefault("patch_bbox", {})[(req.row, req.col)] = (wx, wy, ww, wh)
     return {
@@ -924,10 +966,11 @@ class BatchReq(BaseModel):
     occlusion: bool = False
     recursive: bool = False
     save_patches: bool = True
+    stain_profile: str | None = None
 
 
 def _process_slide_headless(slide_path, archA, archB, percentile, occlusion,
-                             on_thumbnail=None, on_riskmap=None):
+                             on_thumbnail=None, on_riskmap=None, stain_profile=None):
     """Run the full pipeline on one slide with no HTTP session, returning a
     session-like dict ready for _save_session_folder.
 
@@ -939,14 +982,15 @@ def _process_slide_headless(slide_path, archA, archB, percentile, occlusion,
     thumb_path = tmp_dir / f"{slide_path.stem}.jpg"
     thumbnail, tissue_frac, _ = create_wsi_thumbnail(
         slide_path, output_path=str(thumb_path),
-        target_mpp=TARGET_MPP, output_size=THUMB_SIZE)
+        target_mpp=TARGET_MPP, output_size=THUMB_SIZE,
+        stain_profile=stain_profile)
     mapping = load_mapping(thumb_path)
     if on_thumbnail:
         on_thumbnail(thumbnail)
     s = {"slide_path": str(slide_path), "slide_id": slide_path.stem,
          "thumb_path": str(thumb_path), "thumbnail": thumbnail, "mapping": mapping,
          "patches": {}, "patch_bbox": {}, "occlusion": {}, "occl_top": {},
-         "results": {}}
+         "stain_profile": stain_profile, "results": {}}
 
     # Stage A
     mA = get_model("stage_a", archA)
@@ -1003,6 +1047,7 @@ def _process_slide_headless(slide_path, archA, archB, percentile, occlusion,
                 if artifact_frac > 0:
                     print(f"[_process_slide_headless] r{sel['row']}c{sel['col']}: "
                           f"cleaned {artifact_frac*100:.1f}% black scan-artifact pixels")
+            patch = normalize_stage_b_patch(patch, stain_profile)
             s["patches"][(sel["row"], sel["col"])] = patch
             s["patch_bbox"][(sel["row"], sel["col"])] = (wx, wy, ww, wh)
             pv, _ = forward_probs(mB, patch)
@@ -1122,12 +1167,13 @@ def _compute_methodology(save_dir):
     tmp_dir = Path(tempfile.mkdtemp(prefix="gs_method_"))
     thumb_path = tmp_dir / f"{target.stem}.jpg"
     thumbnail, _, _ = create_wsi_thumbnail(
-        target, output_path=str(thumb_path), target_mpp=TARGET_MPP, output_size=THUMB_SIZE)
+        target, output_path=str(thumb_path), target_mpp=TARGET_MPP, output_size=THUMB_SIZE,
+        stain_profile=None)
     mapping = load_mapping(thumb_path)
 
     # real pipeline (RN50/RN50, p95, occlusion on) via the shared headless runner
     s = _process_slide_headless(target, "resnet50", "resnet50",
-                                percentile=95.0, occlusion=True)
+                                percentile=95.0, occlusion=True, stain_profile=None)
 
     mA = get_model("stage_a", "resnet50")
     rm = s["risk_map"]
@@ -1255,6 +1301,40 @@ def _preview_overlay(thumbnail, risk_map):
     return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
+def _batch_worker(slide_path_str, archA, archB, percentile, occlusion,
+                  save_patches, run_dir_str, result_queue, stain_profile=None):
+    """Runs in its own OS process (see _run_batch). Processes one slide fully
+    and puts a small, picklable result dict onto result_queue."""
+    slide_path = Path(slide_path_str)
+    run_dir = Path(run_dir_str)
+    try:
+        s = _process_slide_headless(slide_path, archA, archB, percentile, occlusion,
+                                    stain_profile=stain_profile)
+
+        base = _safe_slide_folder_name(slide_path.stem)
+        gs = run_dir / base
+        k = 2
+        while gs.exists():
+            gs = run_dir / f"{base}_{k}"; k += 1
+        _save_session_folder(s, gs, save_patches=save_patches)
+
+        entry = {
+            "folder": str(gs),
+            "diagnosis": s["results"].get("integrated", {}).get("diagnosis", ""),
+            "grade": s["results"].get("stage_a", {}).get("grade_pred", ""),
+            "subtype": s["results"].get("stage_b", {}).get("subtype_pred", ""),
+            "confidence": s["results"].get("integrated", {}).get("confidence", ""),
+        }
+        thumb_preview = _preview_thumb(s["thumbnail"]) if "thumbnail" in s else None
+        overlay_preview = (_preview_overlay(s["thumbnail"], s["risk_map"])
+                          if "risk_map" in s else None)
+        result_queue.put({"ok": True, "entry": entry,
+                          "thumb_preview": thumb_preview,
+                          "overlay_preview": overlay_preview})
+    except Exception as e:
+        result_queue.put({"ok": False, "error": f"{type(e).__name__}: {e}"})
+
+
 def _run_batch(run_id, slides, run_dir, req):
     prog = BATCH_PROGRESS[run_id]
 
@@ -1266,40 +1346,61 @@ def _run_batch(run_id, slides, run_dir, req):
              "percentile": req.percentile, "occlusion": req.occlusion,
              "save_patches": req.save_patches,
              "n_slides": len(slides), "slides": []}
+    import multiprocessing
+    import queue as _queue_mod
+    ctx = multiprocessing.get_context("spawn")
+
     for i, sp in enumerate(slides):
         prog["current"] = sp.stem
         prog["done"] = i
         emit({"i": i, "slide_id": sp.stem, "field": "start"})
         entry = {"slide_id": sp.stem, "index": i + 1, "status": "ok"}
-        try:
-            s = _process_slide_headless(
-                sp, req.archA, req.archB, req.percentile, req.occlusion,
-                on_thumbnail=lambda th, i=i: emit(
-                    {"i": i, "field": "thumb", "value": _preview_thumb(th)}),
-                on_riskmap=lambda th, rm, i=i: emit(
-                    {"i": i, "field": "overlay", "value": _preview_overlay(th, rm)}))
-            # short + collision-safe folder name: a full TCGA stem repeated
-            # here AND inside the zoom filename pushed paths past Windows'
-            # 260-char MAX_PATH under deep input trees. The hash guarantees
-            # uniqueness without needing the full (long) stem.
-            base = _safe_slide_folder_name(sp.stem)
-            gs = run_dir / base
-            k = 2
-            while gs.exists():
-                gs = run_dir / f"{base}_{k}"; k += 1
-            _save_session_folder(s, gs, save_patches=req.save_patches)
-            entry["folder"] = str(gs)
-            entry["diagnosis"] = s["results"].get("integrated", {}).get("diagnosis", "")
-            entry["grade"] = s["results"].get("stage_a", {}).get("grade_pred", "")
-            entry["subtype"] = s["results"].get("stage_b", {}).get("subtype_pred", "")
-            entry["confidence"] = s["results"].get("integrated", {}).get("confidence", "")
-            prog["ok"] += 1
-            emit({"i": i, "field": "status", "value": "done", "folder": str(gs),
-                  "diagnosis": entry["diagnosis"]})
-        except Exception as e:
-            entry["status"] = "error"; entry["error"] = str(e)
+
+        result_queue = ctx.Queue()
+        proc = ctx.Process(
+            target=_batch_worker,
+            args=(str(sp), req.archA, req.archB, req.percentile, req.occlusion,
+                 req.save_patches, str(run_dir), result_queue, req.stain_profile),
+            daemon=True)
+        proc.start()
+        proc.join(timeout=SLIDE_TIMEOUT_SECONDS)
+
+        if proc.is_alive():
+            proc.terminate()
+            proc.join(timeout=10)
+            if proc.is_alive():
+                proc.kill()
+                proc.join(timeout=10)
+            entry["status"] = "error"
+            entry["error"] = (f"timed out after {SLIDE_TIMEOUT_SECONDS}s and was killed "
+                             f"(slide likely hung reading a malformed region)")
             prog["errors"] += 1
-            emit({"i": i, "field": "status", "value": "error", "error": str(e)})
+            emit({"i": i, "field": "status", "value": "error", "error": entry["error"]})
+        elif proc.exitcode != 0:
+            entry["status"] = "error"
+            entry["error"] = (f"worker process crashed (exit code {proc.exitcode}); "
+                             f"see server console for the native crash record")
+            prog["errors"] += 1
+            emit({"i": i, "field": "status", "value": "error", "error": entry["error"]})
+        else:
+            try:
+                result = result_queue.get_nowait()
+            except _queue_mod.Empty:
+                result = {"ok": False, "error": "worker exited cleanly but returned no result"}
+            if result["ok"]:
+                entry.update(result["entry"])
+                prog["ok"] += 1
+                if result.get("thumb_preview"):
+                    emit({"i": i, "field": "thumb", "value": result["thumb_preview"]})
+                if result.get("overlay_preview"):
+                    emit({"i": i, "field": "overlay", "value": result["overlay_preview"]})
+                emit({"i": i, "field": "status", "value": "done", "folder": entry["folder"],
+                     "diagnosis": entry["diagnosis"]})
+            else:
+                entry["status"] = "error"; entry["error"] = result["error"]
+                prog["errors"] += 1
+                emit({"i": i, "field": "status", "value": "error", "error": entry["error"]})
+        result_queue.close()
         index["slides"].append(entry)
         prog["done"] = i + 1
     (run_dir / "batch_index.json").write_text(json.dumps(index, indent=2, default=str))
@@ -1328,7 +1429,7 @@ def api_batch(req: BatchReq):
         raise HTTPException(400, f"no WSIs in {inp}")
 
     run_id = uuid.uuid4().hex[:8]
-    run_dir = out_root / f"GS_batchrun_{run_id}"
+    run_dir = out_root / f"GS_batchrun_{_arch_tag(req.archA, req.archB)}_{run_id}"
     run_dir.mkdir(parents=True, exist_ok=False)
 
     BATCH_PROGRESS[run_id] = {

@@ -60,15 +60,22 @@ def compute_metrics(y_true, y_prob, class_order):
     present = np.unique(y_true)
     try:
         if len(present) == n_classes:
-            out["macro_auc"] = float(
-                roc_auc_score(y_true, y_prob, multi_class="ovr", average="macro",
-                              labels=labels)
-            )
-            per_class_auc = roc_auc_score(
-                y_true, y_prob, multi_class="ovr", average=None, labels=labels
-            )
-            for i, name in enumerate(class_order):
-                out[f"auc_{name}"] = float(per_class_auc[i])
+            if n_classes == 2:
+                # multi_class='ovr' expects >2 classes; binary needs a 1D score
+                auc = float(roc_auc_score(y_true, y_prob[:, 1]))
+                out["macro_auc"] = auc
+                for name in class_order:
+                    out[f"auc_{name}"] = auc
+            else:
+                out["macro_auc"] = float(
+                    roc_auc_score(y_true, y_prob, multi_class="ovr", average="macro",
+                                  labels=labels)
+                )
+                per_class_auc = roc_auc_score(
+                    y_true, y_prob, multi_class="ovr", average=None, labels=labels
+                )
+                for i, name in enumerate(class_order):
+                    out[f"auc_{name}"] = float(per_class_auc[i])
         else:
             out["macro_auc"] = float("nan")
             for name in class_order:
