@@ -25,6 +25,7 @@ The design keeps compute low while preserving diagnostic signal, so the whole pi
 11. [Ablations](#11-ablations)
 12. [Outputs](#12-outputs)
 13. [Notes and Next Steps](#13-notes-and-next-steps)
+14. [Interactive Dashboard](#14-interactive-dashboard)
 
 ---
 
@@ -496,7 +497,36 @@ Notes:
 - Report five-fold mean ± std, and treat Stage A threshold tuning as a pre-specified sensitivity analysis.
 
 Next steps:
-- Choose a single shipped model per stage for deployment (best fold, ensemble, or refit on all data), for the single-slide and folder inference modes.
 - External validation cohort (e.g. TCGA) as a generalisation test, added alongside the internal five-fold result.
 - Benchmark rerun on the same five splits for a matched comparison, including the compute measurements.
 - YAML config system and mixed precision (AMP).
+
+---
+
+## 14. INTERACTIVE DASHBOARD
+
+A desktop app for running the full pipeline (import a slide -> Stage A grade -> risk map -> Stage B subtype -> integrated diagnosis) without touching the command line. It calls the same `glioma_sparse` modules as the CLI scripts above, so results are identical to `inference_end_to_end.py`.
+
+### 14.1 Run from source
+
+```
+pip install -r requirements.txt
+python -m scripts.dashboard.run_dashboard
+```
+
+Opens as a native window (WebView2 via `pywebview`, not a browser tab), backed by a local FastAPI server on `127.0.0.1:8000`.
+
+### 14.2 Model selection
+
+For each stage (A/B), pick the architecture (ResNet18/ResNet50) and which validation metric (F1 / AUC / accuracy) should decide the "best" fold -- no fold is hardcoded. Every fold under the relevant `training_output*` directory is compared on that metric and the winner's checkpoint is loaded automatically. Stage B pools folds across both patch-extraction cohorts (best-AUC-derived and best-F1-derived Stage A) and picks the single best.
+
+### 14.3 Standalone .exe
+
+`scripts/dashboard/build_exe.py` packages the dashboard (backend, frontend, PyTorch + CUDA runtime, OpenSlide) into a self-contained Windows executable with PyInstaller:
+
+```
+pip install pyinstaller
+python scripts\dashboard\build_exe.py
+```
+
+Output: `dist/GliomaSPARSE-Dashboard/GliomaSPARSE-Dashboard.exe`. Double-click to launch -- no Python install needed, opens straight into the app window. Checkpoint and data paths (`ARCH_OUTPUT_DIRS`, `CONTROL_IMAGE`, etc. in `scripts/dashboard/backend.py`) are hardcoded absolute paths for this machine, so a built exe is not portable to a machine with a different directory layout; rebuild locally if your checkpoints live elsewhere.

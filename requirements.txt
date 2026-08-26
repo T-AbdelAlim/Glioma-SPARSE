@@ -35,3 +35,15 @@ openslide-bin
 # ============================================================
 
 timm
+
+# ============================================================
+# DASHBOARD (scripts/dashboard/)
+# ============================================================
+
+fastapi
+uvicorn
+pydantic
+openpyxl
+pywebview
+
+# pyinstaller  # only needed to build the standalone .exe (build_exe.py)

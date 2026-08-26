@@ -1,0 +1,64 @@
+{
+  "id": "EBRAINS-TCGA-train-ref",
+  "label": "EBRAINS+TCGA combined training reference",
+  "description": "Class-stratified reference fitted directly from the EBRAINS+TCGA combined training data (both sources, unnormalized -- TCGA patches went into training without correction). Supersedes RD-mrxs / TCGA-Glioma for validating models trained on the combined pool: those two profiles were fitted before TCGA was added to training and reflect an EBRAINS-only reference distribution.",
+  "stageA": {
+    "stain_matrix": [
+      [
+        0.2563071844334548,
+        0.5303597151613842
+      ],
+      [
+        0.8580180023743852,
+        0.7177278306454468
+      ],
+      [
+        0.4450974441729188,
+        0.45120431475210443
+      ]
+    ],
+    "max_conc": [
+      0.9478339435173554,
+      0.6263621773452775
+    ],
+    "n_used": 200,
+    "n_failed": 0,
+    "n_total_considered": 200,
+    "classes_included": [
+      "high_grade",
+      "low_grade"
+    ],
+    "classes_excluded_too_few": {}
+  },
+  "fitted_from_stageA": "Stage-A training thumbnails: data/included_ebrains-tcga/{low_grade,high_grade}/*.jpg (both ebrains + tcga sources, grade-stratified, 100/class).",
+  "stageB": {
+    "stain_matrix": [
+      [
+        0.24596117406179313,
+        0.5373044017306597
+      ],
+      [
+        0.8643984834774715,
+        0.7417719683677785
+      ],
+      [
+        0.4385411755080609,
+        0.40134564507996007
+      ]
+    ],
+    "max_conc": [
+      1.1835786158754924,
+      1.603145940616175
+    ],
+    "n_used": 300,
+    "n_failed": 0,
+    "n_total_considered": 300,
+    "classes_included": [
+      "IDH_mt",
+      "IDH_mt_1p19q",
+      "IDH_wt"
+    ],
+    "classes_excluded_too_few": {}
+  },
+  "fitted_from_stageB": "Stage-B training patches: data/stage_b_cohort_tcga_ext/patches/fold_*/<mutation>/*.jpg, TRAIN split only per manifests/stageB_fold*.csv, pooled across all 5 folds, mutation-stratified, 100/class."
+}

@@ -32,6 +32,7 @@ import base64
 import io
 import json
 import re
+import sys
 import time
 import uuid
 
@@ -41,7 +42,6 @@ import torch
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 # ---- real pipeline imports (same as inference_report.py) ----
@@ -59,21 +59,29 @@ import openslide
 
 
 # ============================================================
-# CONFIG  (fold locked to split_02 for this demo, as requested)
+# CONFIG
 # ============================================================
 
-HERE = Path(__file__).resolve().parent
+# index.html sits next to this file in dev; a frozen exe (see run_dashboard.py /
+# build_exe.py) bundles it next to the executable instead, since __file__
+# points into PyInstaller's extracted bundle rather than the real repo tree.
+HERE = (Path(sys._MEIPASS) if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
+        else Path(sys.executable).resolve().parent if getattr(sys, "frozen", False)
+        else Path(__file__).resolve().parent)
 
-CHECKPOINTS = {
-    "stage_a": {
-        "resnet18": r"C:\Users\TAbde\PycharmProjects\Glioma-SPARSE\ResNet18_output\training_output\20260703_0554_resnet18_cw_split_02\best_f1.pth",
-        "resnet50": r"C:\Users\TAbde\PycharmProjects\Glioma-SPARSE\ResNet50_output\training_output\20260714_0955_resnet50_cw_split_02\best_f1.pth",
-    },
-    "stage_b": {
-        "resnet18": r"C:\Users\TAbde\PycharmProjects\Glioma-SPARSE\ResNet18_output\training_output_stageB_F1\20260716_1932_resnet18_stageB_fold2_cw\best_f1.pth",
-        "resnet50": r"C:\Users\TAbde\PycharmProjects\Glioma-SPARSE\ResNet50_output\training_output_stageB_F1\20260716_0552_resnet50_stageB_fold2_cw\best_f1.pth",
-    },
+# checkpoints are resolved dynamically (see resolve_best_checkpoint): for a
+# given arch+metric, every fold under the relevant training_output* dir is
+# compared on that metric's val score and the winner's best_<metric>.pth is
+# loaded. Stage B pools both stageB dirs (best_auc-derived and best_f1-derived
+# Stage-A patch cohorts) and picks the single best fold across both.
+ARCH_OUTPUT_DIRS = {
+    "resnet18": Path(r"C:\Users\TAbde\PycharmProjects\Glioma-SPARSE\ResNet18_output"),
+    "resnet50": Path(r"C:\Users\TAbde\PycharmProjects\Glioma-SPARSE\ResNet50_output"),
 }
+STAGE_A_SUBDIR = "training_output"
+STAGE_B_SUBDIRS = ["training_output_stageB", "training_output_stageB_F1"]
+METRIC_COLUMN = {"f1": "macro_f1", "auc": "macro_auc", "acc": "accuracy"}
+DEFAULT_METRIC = "f1"
 CONTROL_IMAGE = r"C:\Users\TAbde\PycharmProjects\Glioma-SPARSE\data\included\control\86242943-7775-11eb-827d-001a7dda7111.jpg"
 
 # preset example slide for the "Methodology explained" walkthrough: a real GBM
@@ -112,7 +120,8 @@ INTEGRATED = {
 
 _transform = build_eval_transform()
 _control_img = None
-_models = {}   # (stage, arch) -> model
+_models = {}          # (stage, arch, metric) -> model
+_best_ckpt_cache = {}  # (stage, arch, metric) -> (ckpt_path, fold_name, val_value)
 
 
 def control_img():
@@ -122,14 +131,58 @@ def control_img():
     return _control_img
 
 
-def get_model(stage, arch):
-    key = (stage, arch)
+def _fold_dirs(base_dir):
+    return sorted(p for p in base_dir.iterdir() if p.is_dir() and not p.name.startswith("aggregate"))
+
+
+def resolve_best_checkpoint(stage, arch, metric):
+    """Pick the fold with the highest val score for `metric`, across every
+    fold dir under the relevant training_output* tree(s), and return its
+    best_<metric>.pth. Stage B pools STAGE_B_SUBDIRS into one comparison."""
+    key = (stage, arch, metric)
+    if key in _best_ckpt_cache:
+        return _best_ckpt_cache[key]
+    if metric not in METRIC_COLUMN:
+        raise HTTPException(400, f"unknown metric {metric!r}, expected one of {list(METRIC_COLUMN)}")
+    if arch not in ARCH_OUTPUT_DIRS:
+        raise HTTPException(400, f"unknown arch {arch!r}")
+
+    root = ARCH_OUTPUT_DIRS[arch]
+    base_dirs = [root / STAGE_A_SUBDIR] if stage == "stage_a" else [root / d for d in STAGE_B_SUBDIRS]
+    col = METRIC_COLUMN[metric]
+
+    best = None
+    for base_dir in base_dirs:
+        if not base_dir.exists():
+            continue
+        for fold_dir in _fold_dirs(base_dir):
+            metrics_file = fold_dir / "metrics_val.json"
+            ckpt = fold_dir / f"best_{metric}.pth"
+            if not metrics_file.exists() or not ckpt.exists():
+                continue
+            value = json.loads(metrics_file.read_text()).get(col)
+            if value is None:
+                continue
+            if best is None or value > best[0]:
+                best = (value, fold_dir.name, ckpt)
+
+    if best is None:
+        raise HTTPException(400, f"no {metric} checkpoint found for {stage}/{arch} under "
+                                 f"{', '.join(str(d) for d in base_dirs)}")
+    value, fold_name, ckpt = best
+    result = (str(ckpt), fold_name, round(float(value), 4))
+    _best_ckpt_cache[key] = result
+    return result
+
+
+def get_model(stage, arch, metric=DEFAULT_METRIC):
+    key = (stage, arch, metric)
     if key not in _models:
-        ckpt = CHECKPOINTS[stage][arch]
-        if not Path(ckpt).exists():
-            raise HTTPException(400, f"checkpoint not found: {ckpt}")
+        ckpt, _, _ = resolve_best_checkpoint(stage, arch, metric)
         n = len(GRADE_CLASSES) if stage == "stage_a" else len(SUBTYPE_CLASSES)
-        m = build_model(arch, num_classes=n)
+        # pretrained=False: about to load our own checkpoint anyway, so skip the
+        # otherwise-wasted ImageNet-weights download (also lets this run fully offline)
+        m = build_model(arch, num_classes=n, pretrained=False)
         state = torch.load(ckpt, map_location=DEVICE, weights_only=True)
         m.load_state_dict(state)
         m.to(DEVICE).eval()
@@ -170,23 +223,34 @@ def normalize_stage_b_patch(patch, stain_profile):
 
 
 # ============================================================
-# OCCLUSION (mirrors inference_end_to_end.occlusion_map)
+# OCCLUSION (mirrors inference_end_to_end.occlusion_map, but batched --
+# on a CPU-only laptop, 64 individual forward passes is the single slowest
+# step in the app; one batched pass is much faster for the same result)
 # ============================================================
 
-def occlusion_map(model, patch, pred_idx, grid=GRID):
+def occlusion_map(model, patch, pred_idx, grid=GRID, batch_size=16):
     rows, cols = grid
     _, base_logits = forward_probs(model, patch)
     base = float(base_logits[pred_idx])
     tiles = tile_image(patch, grid)
     mean_col = tuple(int(v) for v in np.array(patch).reshape(-1, 3).mean(0))
-    imp = np.zeros((rows, cols), dtype=np.float32)
+
+    occ_imgs = []
     for r in range(rows):
         for c in range(cols):
             occ = list(tiles)
             occ[r * cols + c] = Image.new("RGB", occ[r * cols + c].size, mean_col)
-            occ_img = reconstruct_image(occ, grid, patch.size)
-            _, zl = forward_probs(model, occ_img)
-            imp[r, c] = base - float(zl[pred_idx])
+            occ_imgs.append(reconstruct_image(occ, grid, patch.size))
+
+    logits = []
+    with torch.no_grad():
+        for start in range(0, len(occ_imgs), batch_size):
+            batch = occ_imgs[start:start + batch_size]
+            x = torch.stack([_transform(im) for im in batch]).to(DEVICE)
+            logits.append(model(x).cpu().numpy())
+    logits = np.concatenate(logits, axis=0)
+
+    imp = (base - logits[:, pred_idx]).reshape(rows, cols).astype(np.float32)
     return imp
 
 
@@ -211,13 +275,20 @@ def extract_subtile(slide, patch_wsi_bbox, sr, sc, out_size, grid=8):
 # SESSION STATE
 # ============================================================
 
-SESSIONS = {}   # session_id -> dict
+SESSIONS = {}   # session_id -> dict (insertion order = recency, oldest evicted first)
+MAX_SESSIONS = 8   # each holds full-res thumbnails/patches in memory; bound it for long sittings
 
 
 def sess(sid):
     if sid not in SESSIONS:
         raise HTTPException(400, "unknown session; import a slide first")
     return SESSIONS[sid]
+
+
+def new_session(sid, data):
+    SESSIONS[sid] = data
+    while len(SESSIONS) > MAX_SESSIONS:
+        SESSIONS.pop(next(iter(SESSIONS)))
 
 
 # ============================================================
@@ -231,6 +302,7 @@ class ImportReq(BaseModel):
 class StageAReq(BaseModel):
     session_id: str
     arch: str = "resnet50"
+    metric: str = DEFAULT_METRIC
 
 class RiskReq(BaseModel):
     session_id: str
@@ -246,12 +318,14 @@ class ExtractReq(BaseModel):
 class StageBReq(BaseModel):
     session_id: str
     arch: str = "resnet50"
+    metric: str = DEFAULT_METRIC
 
 class OcclReq(BaseModel):
     session_id: str
     row: int
     col: int
     arch: str = "resnet50"
+    metric: str = DEFAULT_METRIC
 
 class SaveReq(BaseModel):
     session_id: str
@@ -279,6 +353,14 @@ def logo():
     raise HTTPException(404, "logo not found")
 
 
+def _checkpoint_available(stage, arch, metric):
+    try:
+        resolve_best_checkpoint(stage, arch, metric)
+        return True
+    except HTTPException:
+        return False
+
+
 @app.get("/api/config")
 def config():
     return {
@@ -287,9 +369,11 @@ def config():
         "subtype_classes": SUBTYPE_CLASSES,
         "grid": GRID,
         "archs": ["resnet18", "resnet50"],
+        "metrics": list(METRIC_COLUMN),
+        "default_metric": DEFAULT_METRIC,
         "checkpoints_present": {
-            f"{s}:{a}": Path(p).exists()
-            for s, d in CHECKPOINTS.items() for a, p in d.items()
+            f"{s}:{a}:{m}": _checkpoint_available(s, a, m)
+            for s in ("stage_a", "stage_b") for a in ARCH_OUTPUT_DIRS for m in METRIC_COLUMN
         },
     }
 
@@ -353,6 +437,11 @@ def _arch_num(name):
 def _arch_tag(archA, archB):
     """e.g. archA='resnet18', archB='resnet50' -> 'RN1850'."""
     return f"RN{_arch_num(archA)}{_arch_num(archB)}"
+
+
+def _metric_tag(metricA, metricB):
+    """e.g. metricA='f1', metricB='auc' -> 'f1auc'."""
+    return f"{metricA}{metricB}"
 
 
 def _tissue_in_thumb(mapping):
@@ -422,7 +511,7 @@ def api_import(req: ImportReq):
     # collide with or overwrite an earlier save.
     gs_dir = slide_path.parent / f"GS_{_abbrev(slide_path.stem)}_{sid[:8]}"
 
-    SESSIONS[sid] = {
+    new_session(sid, {
         "slide_path": str(slide_path),
         "slide_id": slide_path.stem,
         "gs_dir": str(gs_dir),          # created on save, not now
@@ -434,7 +523,7 @@ def api_import(req: ImportReq):
         "patches": {},
         "results": {},
         "stain_profile": req.stain_profile,
-    }
+    })
     return {
         "session_id": sid,
         "slide_id": slide_path.stem,
@@ -459,12 +548,15 @@ def api_import(req: ImportReq):
 @app.post("/api/stage_a")
 def api_stage_a(req: StageAReq):
     s = sess(req.session_id)
-    model = get_model("stage_a", req.arch)
+    model = get_model("stage_a", req.arch, req.metric)
+    _, fold_name, val_value = resolve_best_checkpoint("stage_a", req.arch, req.metric)
     probs, logits = forward_probs(model, s["thumbnail"])
     pred_idx = int(np.argmax(probs))
-    s["stage_a"] = {"arch": req.arch, "probs": probs, "pred_idx": pred_idx}
+    s["stage_a"] = {"arch": req.arch, "metric": req.metric, "probs": probs, "pred_idx": pred_idx}
     s["results"]["stage_a"] = {
         "arch": req.arch,
+        "metric": req.metric,
+        "checkpoint_fold": fold_name,
         "grade_pred": GRADE_CLASSES[pred_idx],
         "prob_control": round(float(probs[0]), 2),
         "prob_low_grade": round(float(probs[1]), 2),
@@ -477,6 +569,9 @@ def api_stage_a(req: StageAReq):
         "probs": {GRADE_CLASSES[i]: round(float(probs[i]), 2) for i in range(3)},
         "confidence": entropy_conf(probs),
         "arch": req.arch,
+        "metric": req.metric,
+        "checkpoint_fold": fold_name,
+        "val_score": val_value,
     }
 
 
@@ -499,18 +594,21 @@ def api_risk_map(req: RiskReq):
     if "stage_a" not in s:
         raise HTTPException(400, "run stage_a first")
     arch = s["stage_a"]["arch"]
+    metric = s["stage_a"]["metric"]
     # reuse the cached risk map if the Stage A model has not changed; only the
     # percentile threshold is re-applied (fast). Recompute only on model change.
-    if s.get("risk_map") is not None and s.get("risk_map_arch") == arch:
+    if (s.get("risk_map") is not None and s.get("risk_map_arch") == arch
+            and s.get("risk_map_metric") == metric):
         risk_map = s["risk_map"]
     else:
-        model = get_model("stage_a", arch)
+        model = get_model("stage_a", arch, metric)
         risk_map, target_class = compute_risk_map(
             target_img=s["thumbnail"], control_img=control_img(), model=model,
             transform=_transform, grid=GRID, target_class=s["stage_a"]["pred_idx"],
             device=DEVICE, control_shuffle_seed=SEED, score="logit")
         s["risk_map"] = risk_map
         s["risk_map_arch"] = arch
+        s["risk_map_metric"] = metric
 
     # selection: cells >= percentile that pass tissue filter, top-cap by risk
     thresh = float(np.percentile(risk_map.flatten(), req.percentile))
@@ -610,7 +708,8 @@ def api_stage_b(req: StageBReq):
     s = sess(req.session_id)
     if not s["patches"]:
         raise HTTPException(400, "extract at least one patch first")
-    model = get_model("stage_b", req.arch)
+    model = get_model("stage_b", req.arch, req.metric)
+    _, fold_name, val_value = resolve_best_checkpoint("stage_b", req.arch, req.metric)
     per_patch = []
     probs_stack = []
     for (r, c), patch in s["patches"].items():
@@ -624,9 +723,11 @@ def api_stage_b(req: StageBReq):
         })
     slide_probs = np.mean(np.stack(probs_stack, 0), axis=0)
     pred_idx = int(np.argmax(slide_probs))
-    s["stage_b"] = {"arch": req.arch, "slide_probs": slide_probs, "pred_idx": pred_idx}
+    s["stage_b"] = {"arch": req.arch, "metric": req.metric, "slide_probs": slide_probs, "pred_idx": pred_idx}
     s["results"]["stage_b"] = {
         "arch": req.arch,
+        "metric": req.metric,
+        "checkpoint_fold": fold_name,
         "subtype_pred": SUBTYPE_CLASSES[pred_idx],
         "prob_IDH_mt": round(float(slide_probs[0]), 2),
         "prob_IDH_mt_1p19q": round(float(slide_probs[1]), 2),
@@ -640,6 +741,9 @@ def api_stage_b(req: StageBReq):
         "subtype_pred": SUBTYPE_CLASSES[pred_idx],
         "confidence": entropy_conf(slide_probs),
         "arch": req.arch,
+        "metric": req.metric,
+        "checkpoint_fold": fold_name,
+        "val_score": val_value,
     }
 
 
@@ -650,7 +754,7 @@ def api_occlusion(req: OcclReq):
     patch = s["patches"].get((req.row, req.col))
     if patch is None:
         raise HTTPException(400, "extract that patch first")
-    model = get_model("stage_b", req.arch)
+    model = get_model("stage_b", req.arch, req.metric)
     probs, _ = forward_probs(model, patch)
     pred_idx = int(np.argmax(probs))
     imp = occlusion_map(model, patch, pred_idx)
@@ -858,6 +962,8 @@ def _save_session_folder(s, gs, save_patches=True):
         "percentile": s.get("percentile"),
         "archA": s["results"].get("stage_a", {}).get("arch"),
         "archB": s["results"].get("stage_b", {}).get("arch"),
+        "metricA": s["results"].get("stage_a", {}).get("metric"),
+        "metricB": s["results"].get("stage_b", {}).get("metric"),
         "selected": s.get("selected", []),
         "patches": patch_records,
         "stage_a": s["results"].get("stage_a"),
@@ -945,6 +1051,7 @@ def api_load(req: LoadReq):
         "patches_saved": data.get("patches_saved", True),
         "percentile": data.get("percentile"),
         "archA": data.get("archA"), "archB": data.get("archB"),
+        "metricA": data.get("metricA"), "metricB": data.get("metricB"),
         "selected": data.get("selected", []),
         "patches": patches,
         "stage_a": data.get("stage_a"),
@@ -962,6 +1069,8 @@ class BatchReq(BaseModel):
     output_location: str
     archA: str = "resnet50"
     archB: str = "resnet50"
+    metricA: str = DEFAULT_METRIC
+    metricB: str = DEFAULT_METRIC
     percentile: float = 95.0
     occlusion: bool = False
     recursive: bool = False
@@ -970,7 +1079,8 @@ class BatchReq(BaseModel):
 
 
 def _process_slide_headless(slide_path, archA, archB, percentile, occlusion,
-                             on_thumbnail=None, on_riskmap=None, stain_profile=None):
+                             on_thumbnail=None, on_riskmap=None, stain_profile=None,
+                             metricA=DEFAULT_METRIC, metricB=DEFAULT_METRIC):
     """Run the full pipeline on one slide with no HTTP session, returning a
     session-like dict ready for _save_session_folder.
 
@@ -993,12 +1103,14 @@ def _process_slide_headless(slide_path, archA, archB, percentile, occlusion,
          "stain_profile": stain_profile, "results": {}}
 
     # Stage A
-    mA = get_model("stage_a", archA)
+    mA = get_model("stage_a", archA, metricA)
+    _, foldA, _ = resolve_best_checkpoint("stage_a", archA, metricA)
     probsA, _ = forward_probs(mA, thumbnail)
     predA = int(np.argmax(probsA))
-    s["stage_a"] = {"arch": archA, "probs": probsA, "pred_idx": predA}
+    s["stage_a"] = {"arch": archA, "metric": metricA, "probs": probsA, "pred_idx": predA}
     s["results"]["stage_a"] = {
-        "arch": archA, "grade_pred": GRADE_CLASSES[predA],
+        "arch": archA, "metric": metricA, "checkpoint_fold": foldA,
+        "grade_pred": GRADE_CLASSES[predA],
         "prob_control": round(float(probsA[0]), 2),
         "prob_low_grade": round(float(probsA[1]), 2),
         "prob_high_grade": round(float(probsA[2]), 2),
@@ -1027,7 +1139,8 @@ def _process_slide_headless(slide_path, archA, archB, percentile, occlusion,
     s["percentile"] = percentile
 
     # extract + Stage B
-    mB = get_model("stage_b", archB)
+    mB = get_model("stage_b", archB, metricB)
+    _, foldB, _ = resolve_best_checkpoint("stage_b", archB, metricB)
     slide = openslide.OpenSlide(mapping.wsi_path)
     probs_stack = []
     try:
@@ -1079,9 +1192,10 @@ def _process_slide_headless(slide_path, archA, archB, percentile, occlusion,
     if probs_stack:
         slide_probs = np.mean(np.stack(probs_stack, 0), axis=0)
         predB = int(np.argmax(slide_probs))
-        s["stage_b"] = {"arch": archB, "slide_probs": slide_probs, "pred_idx": predB}
+        s["stage_b"] = {"arch": archB, "metric": metricB, "slide_probs": slide_probs, "pred_idx": predB}
         s["results"]["stage_b"] = {
-            "arch": archB, "subtype_pred": SUBTYPE_CLASSES[predB],
+            "arch": archB, "metric": metricB, "checkpoint_fold": foldB,
+            "subtype_pred": SUBTYPE_CLASSES[predB],
             "prob_IDH_mt": round(float(slide_probs[0]), 2),
             "prob_IDH_mt_1p19q": round(float(slide_probs[1]), 2),
             "prob_IDH_wt": round(float(slide_probs[2]), 2),
@@ -1302,14 +1416,16 @@ def _preview_overlay(thumbnail, risk_map):
 
 
 def _batch_worker(slide_path_str, archA, archB, percentile, occlusion,
-                  save_patches, run_dir_str, result_queue, stain_profile=None):
+                  save_patches, run_dir_str, result_queue, stain_profile=None,
+                  metricA=DEFAULT_METRIC, metricB=DEFAULT_METRIC):
     """Runs in its own OS process (see _run_batch). Processes one slide fully
     and puts a small, picklable result dict onto result_queue."""
     slide_path = Path(slide_path_str)
     run_dir = Path(run_dir_str)
     try:
         s = _process_slide_headless(slide_path, archA, archB, percentile, occlusion,
-                                    stain_profile=stain_profile)
+                                    stain_profile=stain_profile,
+                                    metricA=metricA, metricB=metricB)
 
         base = _safe_slide_folder_name(slide_path.stem)
         gs = run_dir / base
@@ -1343,6 +1459,7 @@ def _run_batch(run_id, slides, run_dir, req):
 
     index = {"run_id": run_id, "created": time.strftime("%Y-%m-%d %H:%M:%S"),
              "input_folder": req.input_folder, "archA": req.archA, "archB": req.archB,
+             "metricA": req.metricA, "metricB": req.metricB,
              "percentile": req.percentile, "occlusion": req.occlusion,
              "save_patches": req.save_patches,
              "n_slides": len(slides), "slides": []}
@@ -1360,7 +1477,8 @@ def _run_batch(run_id, slides, run_dir, req):
         proc = ctx.Process(
             target=_batch_worker,
             args=(str(sp), req.archA, req.archB, req.percentile, req.occlusion,
-                 req.save_patches, str(run_dir), result_queue, req.stain_profile),
+                 req.save_patches, str(run_dir), result_queue, req.stain_profile,
+                 req.metricA, req.metricB),
             daemon=True)
         proc.start()
         proc.join(timeout=SLIDE_TIMEOUT_SECONDS)
@@ -1429,7 +1547,8 @@ def api_batch(req: BatchReq):
         raise HTTPException(400, f"no WSIs in {inp}")
 
     run_id = uuid.uuid4().hex[:8]
-    run_dir = out_root / f"GS_batchrun_{_arch_tag(req.archA, req.archB)}_{run_id}"
+    run_dir = out_root / (f"GS_batchrun_{_arch_tag(req.archA, req.archB)}_"
+                          f"{_metric_tag(req.metricA, req.metricB)}_{run_id}")
     run_dir.mkdir(parents=True, exist_ok=False)
 
     BATCH_PROGRESS[run_id] = {
@@ -1486,7 +1605,8 @@ def _write_batch_xlsx(path, index):
     ws.append([f"Glioma-SPARSE batch run {index['run_id']}"])
     ws["A1"].font = Font(bold=True, size=14, color="1F3864")
     ws.append(["created", index["created"], "models",
-               f"A:{index['archA']} B:{index['archB']}", "p", index["percentile"]])
+               f"A:{index['archA']}/{index.get('metricA','f1')} "
+               f"B:{index['archB']}/{index.get('metricB','f1')}", "p", index["percentile"]])
     ws.append([])
     hdr = ["#", "slide_id", "grade", "subtype", "integrated diagnosis",
            "confidence", "status"]
@@ -1525,9 +1645,13 @@ def _write_xlsx(path, s):
         ("Integrated confidence", integ.get("confidence", "")),
         ("", ""),
         ("Stage A model", R.get("stage_a", {}).get("arch", "")),
+        ("Stage A checkpoint", f"best {R.get('stage_a', {}).get('metric', '')} "
+                               f"(fold {R.get('stage_a', {}).get('checkpoint_fold', '')})"),
         ("Stage A grade", R.get("stage_a", {}).get("grade_pred", "")),
         ("Stage A confidence", R.get("stage_a", {}).get("confidence", "")),
         ("Stage B model", R.get("stage_b", {}).get("arch", "")),
+        ("Stage B checkpoint", f"best {R.get('stage_b', {}).get('metric', '')} "
+                               f"(fold {R.get('stage_b', {}).get('checkpoint_fold', '')})"),
         ("Stage B subtype", R.get("stage_b", {}).get("subtype_pred", "")),
         ("Stage B confidence", R.get("stage_b", {}).get("confidence", "")),
         ("Patches used", R.get("stage_b", {}).get("n_patches", "")),
@@ -1555,8 +1679,3 @@ def _write_xlsx(path, s):
     for cls, key in zip(SUBTYPE_CLASSES, ["prob_IDH_mt", "prob_IDH_mt_1p19q", "prob_IDH_wt"]):
         b.append([cls, R.get("stage_b", {}).get(key, "")])
     wb.save(path)
-
-
-# mount static (index.html, etc.) if present
-if (HERE).exists():
-    app.mount("/static", StaticFiles(directory=str(HERE)), name="static")

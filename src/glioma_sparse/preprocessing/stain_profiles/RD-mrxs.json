@@ -1,0 +1,86 @@
+{
+  "id": "RD-mrxs",
+  "label": "RD-mrxs",
+  "description": "External-validation set sourced from .mrxs whole-slide images. Found to carry systematically less apparent hematoxylin and a paler, washed-out appearance relative to the EBRAINS training distribution.",
+  "fitted_from_stageA": "Stage-A thumbnails: 300 randomly sampled top-level {name}.jpg files under {subtype}/GS_batchrun_*/GS_*_hash/ (figures/ and *_Gunknown subtype folders excluded).",
+  "fitted_from_stageB": "Stage-B patches: 300 randomly sampled figures/patch_rXcY.jpg files from the same run (stageA_riskmap.jpg and *_Gunknown subtype folders excluded).",
+  "stageA": {
+    "stain_matrix": [
+      [
+        0.2764102621650142,
+        0.5575000512208681
+      ],
+      [
+        0.8915344714990919,
+        0.7196258597979204
+      ],
+      [
+        0.3588365269850645,
+        0.41392307835977615
+      ]
+    ],
+    "max_conc": [
+      0.9839783489534042,
+      0.567523451201379
+    ],
+    "n_used": 353,
+    "n_failed": 0,
+    "n_total_considered": 353,
+    "classes_included": [
+      "GBM_IDHwt",
+      "astro_IDHmt_G2",
+      "astro_IDHmt_G3",
+      "astro_IDHmt_G4",
+      "control",
+      "oligo_IDHmt_1p19qdel_G2",
+      "oligo_IDHmt_1p19qdel_G3"
+    ],
+    "classes_excluded_too_few": {}
+  },
+  "stageB": {
+    "stain_matrix": [
+      [
+        0.23990332182228194,
+        0.5593236421987473
+      ],
+      [
+        0.8950940522822753,
+        0.7480866735320071
+      ],
+      [
+        0.37583644547532913,
+        0.3571041755025332
+      ]
+    ],
+    "max_conc": [
+      1.3182261998866105,
+      1.7203947425920554
+    ],
+    "n_used": 300,
+    "n_failed": 0,
+    "n_total_considered": 300,
+    "classes_included": [
+      "IDH_mt",
+      "IDH_mt_1p19q",
+      "IDH_wt"
+    ]
+  },
+  "validated_against": {
+    "training_reference": "300 randomly sampled EBRAINS training thumbnails/patches (data/ebrains_thumbnails, data/stage_b_cohort_RN18_F1/patches)",
+    "stageA_h_angle_deg": 16.312757649419428,
+    "stageA_e_angle_deg": 11.449814027104551,
+    "stageA_conc_ratio_vs_train": [
+      0.6744321894626011,
+      0.9185760389787282
+    ],
+    "stageB_h_angle_deg": 15.095944656340716,
+    "stageB_e_angle_deg": 11.28117629189823,
+    "stageB_conc_ratio_vs_train": [
+      0.6066771951970739,
+      0.7904617838772536
+    ],
+    "note": "Radboud carries ~33% less apparent hematoxylin at Stage-A and ~39% less at Stage-B than the training reference. LAB lightness before/after normalization: Stage-A 88.7 -> 85.6 (target 79.7); Stage-B 77.8 -> 68.3 (target 67.6, near-exact). The a/b colour axes overshoot slightly past the target in both stages -- inspect normalized output visually before trusting blindly.",
+    "fitted_on": "2026-07-29"
+  },
+  "_note": "stageA/stageB above are the shared class-balanced training target (same numbers as TCGA-Glioma.json's target -- there is only one target, fit once from training data; 'profile' selects WHETHER to correct and documents how that dataset compares to it, not a different target). UPDATED 2026-07-30 to the class-balanced version. This profile's own validated_against diagnostics below were computed via plain (non-stratified) uniform sampling of Radboud's pool and have NOT been recomputed with class stratification yet -- the Radboud data lives on an external drive (E:) that was not connected when this fix was made. Re-run the class-stratified characterization once it's available."
+}

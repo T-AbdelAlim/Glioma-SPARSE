@@ -25,7 +25,7 @@
     padding:4px 10px;border:1px solid var(--line);border-radius:20px}
   .wrap{display:grid;grid-template-columns:320px 1fr;gap:0;height:calc(100vh - 59px)}
   .sidebar{background:var(--panel);border-right:1px solid var(--line);
-    padding:16px;overflow-y:auto}
+    padding:16px;overflow-y:auto;position:relative}
   .stage-view{position:relative;overflow:hidden;background:
     radial-gradient(circle at 30% 20%,#131a24,#0e1117 70%)}
   svg#stage{width:100%;height:100%;display:block}
@@ -161,19 +161,34 @@
     </div>
 
     <div class="group">
-      <h3>2 · Models (fold locked: split_02)</h3>
+      <h3>2 · Models (best fold auto-selected)</h3>
       <label class="row">Stage A
         <span class="seg" id="segA">
           <button data-a="resnet18">RN18</button>
           <button data-a="resnet50" class="on">RN50</button>
         </span>
       </label>
-      <label class="row">Stage B
+      <label class="row" style="margin-top:4px">Stage A best-by
+        <span class="seg" id="segAMetric">
+          <button data-m="f1" class="on">F1</button>
+          <button data-m="auc">AUC</button>
+          <button data-m="acc">Acc</button>
+        </span>
+      </label>
+      <label class="row" style="margin-top:10px">Stage B
         <span class="seg" id="segB">
           <button data-b="resnet18">RN18</button>
           <button data-b="resnet50" class="on">RN50</button>
         </span>
       </label>
+      <label class="row" style="margin-top:4px">Stage B best-by
+        <span class="seg" id="segBMetric">
+          <button data-m="f1" class="on">F1</button>
+          <button data-m="auc">AUC</button>
+          <button data-m="acc">Acc</button>
+        </span>
+      </label>
+      <div class="status" id="modelsInfo" style="margin-top:6px"></div>
     </div>
 
     <div class="group">
@@ -328,7 +343,7 @@ const COL={control:"#adcba3",low_grade:"#ffe1a8",high_grade:"#e26d5c",
 const INK={control:"#3a3a2e",low_grade:"#6b4e18",high_grade:"#fff",
   IDH_mt:"#1d3a3d",IDH_mt_1p19q:"#2a3a30",IDH_wt:"#fff"};
 
-let S={session:null,archA:"resnet50",archB:"resnet50",stainProfile:null,
+let S={session:null,archA:"resnet50",archB:"resnet50",metricA:"f1",metricB:"f1",stainProfile:null,
   signal:true,pred:true,raw:false,occl:false,
   thumb:null,thumbSize:2048,thumbW:2048,thumbH:2048,wsiDim:null,tissueInThumb:null,
   gridR:8,gridC:8,
@@ -336,9 +351,15 @@ let S={session:null,archA:"resnet50",archB:"resnet50",stainProfile:null,
   lastCfg:null,_fadeInKeys:null,_occlRevealOnly:false,
   patchCache:{},occlCache:{},occlAvailable:true,savePatches:true};   // key "r_c" -> patch record / occlusion, reused across percentile changes
 const ARCH_LABEL={resnet18:"ResNet18",resnet50:"ResNet50"};
+const METRIC_LABEL={f1:"F1",auc:"AUC",acc:"Acc"};
+function updateModelsInfo(A,B){
+  const el=$("modelsInfo");if(!el)return;
+  const line=(r,tag)=>r&&r.checkpoint_fold?
+    `${tag}: fold ${r.checkpoint_fold} (val ${METRIC_LABEL[r.metric]||r.metric} ${r.val_score!=null?r.val_score:"?"})`:"";
+  el.innerHTML=[line(A,"A"),line(B,"B")].filter(Boolean).join("<br>");
+}
 
 // ---- config ----
-API("../api/config",{}).catch(()=>fetch("/api/config").then(r=>r.json())).then(()=>{});
 fetch("/api/config").then(r=>r.json()).then(c=>{$("dev").textContent="device: "+c.device;});
 
 // ---- toggles & segments ----
@@ -352,20 +373,25 @@ $("tOccl").onclick=async()=>{
     if(!S.session){renderStatic();return;}   // loaded result: no live model
     const need=S.lastRun.patches.filter(p=>!S.lastRun.occl[p.row+"_"+p.col]);
     if(need.length){
+      lockUI();
       $("tOccl").style.pointerEvents="none";$("tOccl").style.opacity=".6";
       showBusy(`Computing occlusion maps… 0/${need.length}`);
       const st=$("runStatus");
       let done=0;
-      for(const p of need){
-        setBusy(`Computing occlusion maps… ${done}/${need.length} (r${p.row}c${p.col})`);
-        st.innerHTML=`<span class="spinner"></span>occlusion r${p.row}c${p.col}…`;
-        S.lastRun.occl[p.row+"_"+p.col]=await API("stage_b_occlusion",
-          {session_id:S.session,row:p.row,col:p.col,arch:S.archB});
-        done++;
+      try{
+        for(const p of need){
+          setBusy(`Computing occlusion maps… ${done}/${need.length} (r${p.row}c${p.col})`);
+          st.innerHTML=`<span class="spinner"></span>occlusion r${p.row}c${p.col}…`;
+          S.lastRun.occl[p.row+"_"+p.col]=await API("stage_b_occlusion",
+            {session_id:S.session,row:p.row,col:p.col,arch:S.archB,metric:S.metricB});
+          done++;
+        }
+        st.textContent="✓ occlusion ready";
+      }finally{
+        hideBusy();
+        $("tOccl").style.pointerEvents="";$("tOccl").style.opacity="";
+        unlockUI();
       }
-      st.textContent="✓ occlusion ready";
-      hideBusy();
-      $("tOccl").style.pointerEvents="";$("tOccl").style.opacity="";
     }
   }
   // gentle reveal: ease the occlusion overlay in rather than snapping, without
@@ -393,6 +419,34 @@ function showBusy(msg){
 function setBusy(msg){const m=$("busyMsg");if(m)m.textContent=msg;}
 function hideBusy(){const b=$("busy");if(b)b.style.display="none";}
 
+// ---- global busy lock ----
+// While an operation that reads/writes server-side session state is in
+// flight (import, run, save, load, batch start, occlusion, methodology
+// first-run), block every other button in the sidebar plus the methodology
+// button so a stray click can't kick off a second overlapping operation --
+// that's what used to make the app look like it froze. Nested lockUI/unlockUI
+// calls are safe (depth-counted); local-only view toggles (signal/pred/raw)
+// stay clickable since they never touch the server.
+let busyDepth=0;
+function lockUI(){
+  busyDepth++;
+  if(busyDepth>1)return;
+  let ov=$("uiLockOverlay");
+  if(!ov){
+    ov=document.createElement("div");ov.id="uiLockOverlay";
+    ov.style.cssText="position:absolute;inset:0;z-index:60;cursor:wait";
+    document.querySelector(".sidebar").appendChild(ov);
+  }
+  ov.style.display="block";
+  $("btnMethod").disabled=true;
+}
+function unlockUI(){
+  busyDepth=Math.max(0,busyDepth-1);
+  if(busyDepth>0)return;
+  const ov=$("uiLockOverlay");if(ov)ov.style.display="none";
+  $("btnMethod").disabled=false;
+}
+
 // enable/disable the Stage B occlusion toggle (disabled for loaded results that
 // have no occlusion data saved)
 function setOcclToggleEnabled(on){
@@ -414,6 +468,10 @@ $("segA").onclick=e=>{if(e.target.dataset.a){S.archA=e.target.dataset.a;
   [...$("segA").children].forEach(b=>b.classList.toggle("on",b.dataset.a===S.archA));}};
 $("segB").onclick=e=>{if(e.target.dataset.b){S.archB=e.target.dataset.b;
   [...$("segB").children].forEach(b=>b.classList.toggle("on",b.dataset.b===S.archB));}};
+$("segAMetric").onclick=e=>{if(e.target.dataset.m){S.metricA=e.target.dataset.m;
+  [...$("segAMetric").children].forEach(b=>b.classList.toggle("on",b.dataset.m===S.metricA));}};
+$("segBMetric").onclick=e=>{if(e.target.dataset.m){S.metricB=e.target.dataset.m;
+  [...$("segBMetric").children].forEach(b=>b.classList.toggle("on",b.dataset.m===S.metricB));}};
 
 (async()=>{
   const sel=$("stainProfileSel");
@@ -470,6 +528,7 @@ async function transitionPercentile(removed,added){
 
 async function livePercentile(pct){
   const st=$("runStatus");
+  lockUI();
   try{
     // re-select at the new percentile (backend reuses the cached risk map)
     const R=await API("risk_map",{session_id:S.session,percentile:pct,cap:0});
@@ -496,7 +555,7 @@ async function livePercentile(pct){
     }
     // Stage B over the new tile set (fast: one pass per tile)
     st.innerHTML='<span class="spinner"></span>Stage B molecular…';
-    const B=await API("stage_b",{session_id:S.session,arch:S.archB});
+    const B=await API("stage_b",{session_id:S.session,arch:S.archB,metric:S.metricB});
     // occlusion: reuse cache; compute only for tiles that still lack it
     let occl={};
     if(S.occl){
@@ -505,16 +564,18 @@ async function livePercentile(pct){
         if(S.occlCache[key]){occl[key]=S.occlCache[key];continue;}
         st.innerHTML=`<span class="spinner"></span>occlusion r${sel.row}c${sel.col}…`;
         occl[key]=await API("stage_b_occlusion",
-          {session_id:S.session,row:sel.row,col:sel.col,arch:S.archB});
+          {session_id:S.session,row:sel.row,col:sel.col,arch:S.archB,metric:S.metricB});
         S.occlCache[key]=occl[key];
       }
     }
     const I=await API("integrate",{session_id:S.session,arch:S.archB});
     S.lastRun={A:S.lastRun.A,R,patches,B,occl,I};S.lastCfg={...S.lastCfg,pct};
+    updateModelsInfo(S.lastRun.A,B);
     st.textContent=`✓ ${patches.length} tile${patches.length>1?"s":""}`;
     // fade in only tiles that are genuinely new to the view
     await transitionPercentile(removed,added);
   }catch(e){st.textContent="✕ "+e.message;}
+  unlockUI();
 }
 
 // ---- browse (native OS dialog via backend) ----
@@ -537,6 +598,7 @@ $("btnImport").onclick=async()=>{
   if(!path){$("importStatus").textContent="enter a slide path";return;}
   $("importStatus").innerHTML='<span class="spinner"></span>building thumbnail…';
   $("btnImport").disabled=true;
+  lockUI();
   try{
     const r=await API("import",{slide_path:path,stain_profile:S.stainProfile});
     S.session=r.session_id;S.thumb=r.thumbnail;S.thumbSize=r.thumbnail_size;
@@ -555,6 +617,7 @@ $("btnImport").onclick=async()=>{
     drawInitial();
   }catch(e){$("importStatus").textContent="✕ "+e.message;}
   $("btnImport").disabled=false;
+  unlockUI();
 };
 
 // ---- layout coordinates on the 1200x800 canvas ----
@@ -651,11 +714,12 @@ async function runPipeline(animate){
   // grey out the methodology button so it can't interrupt a running analysis
   $("btnMethod").disabled=true;$("btnMethod").style.opacity=".45";
   $("btnMethod").style.pointerEvents="none";
+  lockUI();
   const pct=+$("pct").value;
-  const cfg={archA:S.archA,archB:S.archB,pct};
+  const cfg={archA:S.archA,archB:S.archB,metricA:S.metricA,metricB:S.metricB,pct};
   const prev=S.lastCfg;
-  const archAchanged = !prev || prev.archA!==cfg.archA;
-  const archBchanged = !prev || prev.archB!==cfg.archB;
+  const archAchanged = !prev || prev.archA!==cfg.archA || prev.metricA!==cfg.metricA;
+  const archBchanged = !prev || prev.archB!==cfg.archB || prev.metricB!==cfg.metricB;
   const pctChanged   = !prev || prev.pct!==cfg.pct;
   try{
     if(animate&&S.thumb)livePreview("thumb");
@@ -663,7 +727,7 @@ async function runPipeline(animate){
     // Stage A + risk map: recompute only if the Stage A model changed.
     let A=S.lastRun&&!archAchanged?S.lastRun.A:null;
     if(!A){st.innerHTML='<span class="spinner"></span>Stage A grade…';
-      A=await API("stage_a",{session_id:S.session,arch:S.archA});}
+      A=await API("stage_a",{session_id:S.session,arch:S.archA,metric:S.metricA});}
     runProgress(0.12,"Stage A signal map…");
     st.innerHTML='<span class="spinner"></span>Stage A signal map…';
     const R=await API("risk_map",{session_id:S.session,percentile:pct,cap:0});
@@ -704,7 +768,7 @@ async function runPipeline(animate){
       patches.some((p,i)=>!S.lastRun.patches[i]||S.lastRun.patches[i].row!==p.row||S.lastRun.patches[i].col!==p.col);
     if(!archBchanged && !tilesChanged && S.lastRun){B=S.lastRun.B;}
     else{st.innerHTML='<span class="spinner"></span>Stage B molecular…';
-      B=await API("stage_b",{session_id:S.session,arch:S.archB});}
+      B=await API("stage_b",{session_id:S.session,arch:S.archB,metric:S.metricB});}
 
     // Occlusion: reuse session cache; compute only tiles that lack it.
     let occl={};
@@ -719,13 +783,14 @@ async function runPipeline(animate){
         runProgress(0.80+0.15*(oi/Math.max(1,occNeed.length)),
           `occlusion ${oi+1}/${occNeed.length}`);
         occl[key]=await API("stage_b_occlusion",
-          {session_id:S.session,row:sel.row,col:sel.col,arch:S.archB});
+          {session_id:S.session,row:sel.row,col:sel.col,arch:S.archB,metric:S.metricB});
         S.occlCache[key]=occl[key];oi++;
       }
     }
     runProgress(0.97,"integrating…");
     const I=await API("integrate",{session_id:S.session,arch:S.archB});
     S.lastRun={A,R,patches,B,occl,I};S.lastCfg=cfg;
+    updateModelsInfo(A,B);
     runProgress(1.0,"complete");
     st.textContent="✓ complete";
     $("btnSave").disabled=false;$("btnReplay").disabled=false;
@@ -735,6 +800,7 @@ async function runPipeline(animate){
   $("btnRun").disabled=false;
   $("btnMethod").disabled=false;$("btnMethod").style.opacity="";
   $("btnMethod").style.pointerEvents="";
+  unlockUI();
 }
 
 // ---- probability bars helper (SVG) ----
@@ -1037,7 +1103,9 @@ async function animateFrom(run){
   $("dxConf").textContent=S.raw?("integrated confidence "+run.I.integrated_confidence.toFixed(2)):"";
   // provenance: the settings that produced this result
   const pv=run.R.percentile!=null?run.R.percentile:(+$("pct").value);
-  $("dxProv").textContent=`Stage A ${ARCH_LABEL[S.archA]} · Stage B ${ARCH_LABEL[S.archB]} · p${pv} · ${run.patches.length} tile${run.patches.length===1?"":"s"}`;
+  $("dxProv").textContent=`Stage A ${ARCH_LABEL[S.archA]}/${METRIC_LABEL[S.metricA]} · `+
+    `Stage B ${ARCH_LABEL[S.archB]}/${METRIC_LABEL[S.metricB]} · p${pv} · `+
+    `${run.patches.length} tile${run.patches.length===1?"":"s"}`;
 }
 
 // display-only toggles: re-render the last run instantly (INSTANT skips the
@@ -1227,11 +1295,17 @@ $("btnBatchRun").onclick=async()=>{
   $("batchProgTxt").textContent="starting…";
   resetBatchGrid();
   showBatchLive();
+  // lock only while the batch job is being kicked off (prevents a double-click
+  // from starting two runs); the run itself continues in the background on the
+  // server via polling below, deliberately not blocking the rest of the UI.
+  lockUI();
+  let runId, total;
   try{
     const start=await API("batch",{input_folder:batchCfg.input,output_location:batchCfg.output,
-      archA:S.archA,archB:S.archB,percentile:+$("pct").value,occlusion:S.occl,
+      archA:S.archA,archB:S.archB,metricA:S.metricA,metricB:S.metricB,
+      percentile:+$("pct").value,occlusion:S.occl,
       recursive:batchCfg.recursive,save_patches:S.savePatches,stain_profile:S.stainProfile});
-    const runId=start.run_id, total=start.total;
+    runId=start.run_id; total=start.total;
     batchGrid.runId=runId;
     // poll for incremental updates only (cheap even over hundreds of slides:
     // finished/unchanged slides are never re-sent)
@@ -1258,6 +1332,7 @@ $("btnBatchRun").onclick=async()=>{
     poll();
   }catch(e){$("batchProgTxt").textContent="";$("batchStatus").textContent="✕ "+e.message;
     $("btnBatchRun").disabled=false;}
+  unlockUI();
 };
 
 $("btnBatchOpen").onclick=async()=>{
@@ -1281,7 +1356,9 @@ function closeBatchTable(){
 function showBatchTable(index,runDir){
   lastOverview={type:"table",index,runDir};
   $("batchTitle").textContent=`Batch run ${index.run_id}`;
-  $("batchMeta").textContent=`${index.n_slides} slides · models A:${index.archA} B:${index.archB} · p${index.percentile} · ${index.created}`;
+  $("batchMeta").textContent=`${index.n_slides} slides · `+
+    `models A:${index.archA}/${index.metricA||"f1"} B:${index.archB}/${index.metricB||"f1"} · `+
+    `p${index.percentile} · ${index.created}`;
   const wrap=$("batchTable");wrap.innerHTML="";
   const tbl=document.createElement("table");
   tbl.style.cssText="width:100%;border-collapse:collapse;font-size:12px";
@@ -1319,11 +1396,13 @@ function showBatchTable(index,runDir){
 // ---- load previous result ----
 $("btnLoad").onclick=async()=>{
   $("loadStatus").innerHTML='<span class="spinner"></span>choosing folder…';
+  lockUI();
   let folder="";
   try{const b=await API("browse_folder",{});folder=b.folder;}catch(e){
     folder=prompt("Path to a GS_ analysis folder:")||"";}
-  if(!folder){$("loadStatus").textContent="cancelled";return;}
+  if(!folder){$("loadStatus").textContent="cancelled";unlockUI();return;}
   await loadFolder(folder);
+  unlockUI();
 };
 
 $("btnBackToBatch").onclick=()=>{
@@ -1337,6 +1416,7 @@ async function loadFolder(folder,fromBatch=false){
   hideBatchLive();
   $("btnBackToBatch").classList.toggle("hidden",!fromBatch);
   $("loadStatus").innerHTML='<span class="spinner"></span>loading…';
+  lockUI();
   try{
     const d=await API("load",{folder});
     S.thumb=d.thumbnail;S.thumbW=d.thumbnail_w;S.thumbH=d.thumbnail_h;
@@ -1379,23 +1459,29 @@ async function loadFolder(folder,fromBatch=false){
     // reflect the settings that produced this result in the sidebar controls
     if(d.archA){S.archA=d.archA;[...$("segA").children].forEach(b=>b.classList.toggle("on",b.dataset.a===d.archA));}
     if(d.archB){S.archB=d.archB;[...$("segB").children].forEach(b=>b.classList.toggle("on",b.dataset.b===d.archB));}
+    if(d.metricA){S.metricA=d.metricA;[...$("segAMetric").children].forEach(b=>b.classList.toggle("on",b.dataset.m===d.metricA));}
+    if(d.metricB){S.metricB=d.metricB;[...$("segBMetric").children].forEach(b=>b.classList.toggle("on",b.dataset.m===d.metricB));}
     if(d.percentile!=null){$("pct").value=d.percentile;$("pctVal").textContent=d.percentile;}
     S.lastRun=run;S.selected=d.selected;
     $("btnSave").disabled=true;$("btnReplay").disabled=false;
     $("loadStatus").innerHTML=`✓ loaded ${d.slide_id}<br>`+
-      `<span style="color:var(--mut)">A:${d.archA?ARCH_LABEL[d.archA]:"?"} · B:${d.archB?ARCH_LABEL[d.archB]:"?"} · p${d.percentile!=null?d.percentile:"?"}`+
+      `<span style="color:var(--mut)">A:${d.archA?ARCH_LABEL[d.archA]:"?"}${d.metricA?"/"+METRIC_LABEL[d.metricA]:""} · `+
+      `B:${d.archB?ARCH_LABEL[d.archB]:"?"}${d.metricB?"/"+METRIC_LABEL[d.metricB]:""} · p${d.percentile!=null?d.percentile:"?"}`+
       `${occlAvail?" · occlusion":""}</span>`;
     await animateFrom(run);
   }catch(e){$("loadStatus").textContent="✕ "+e.message;}
+  unlockUI();
 }
 
 // ---- save ----
 $("btnSave").onclick=async()=>{
   $("saveStatus").innerHTML='<span class="spinner"></span>writing report & figures…';
+  lockUI();
   try{const r=await API("save",{session_id:S.session});
     $("saveStatus").innerHTML=`✓ saved ${r.saved.length} files<br>`
       +`<span style="color:var(--mut)">${r.report.split(/[\\/]/).pop()}</span>`;
   }catch(e){$("saveStatus").textContent="✕ "+e.message;}
+  unlockUI();
 };
 
 // ============================================================
@@ -1430,11 +1516,23 @@ const METHOD=(function(){
         {duration:240,delay:(r*gc+c)*delay,fill:"forwards"});}
   }
 
-  let DATA=null, loading=false, err=null;
-  async function load(){
-    if(DATA||loading)return;loading=true;err=null;
-    try{DATA=await API("methodology",{});}catch(e){err=e.message||String(e);}
-    loading=false;
+  let DATA=null, err=null, loadPromise=null;
+  // clicking Next/Prev/a dot while the first-run fetch is still in flight used
+  // to call load() again; since the old "loading" boolean guard just returned
+  // immediately without waiting, render() re-entered itself in a tight loop
+  // (no real await ever happened) and pegged the CPU until the real fetch
+  // finished, which looked and felt like the whole app freezing. Concurrent
+  // callers now share and genuinely await the SAME in-flight promise instead.
+  function load(){
+    if(DATA)return Promise.resolve();
+    if(!loadPromise){
+      err=null;
+      loadPromise=API("methodology",{})
+        .then(d=>{DATA=d;})
+        .catch(e=>{err=e.message||String(e);})
+        .finally(()=>{loadPromise=null;});
+    }
+    return loadPromise;
   }
 
   // ---- STEP RENDERERS (take the data object; usable for cache OR live) ----
@@ -1691,7 +1789,7 @@ const METHOD=(function(){
       T(500,320,err,{anchor:"middle",fill:"#8b949e",size:12});return;}
     if(!DATA){spinner("Building the example — first run only…",
       "runs the real RN50/RN50 pipeline + occlusion once (can take ~30–60 s), then caches to disk; later opens are instant");
-      await load();if(tok!==RUN)return;return render();}
+      lockUI();await load();unlockUI();if(tok!==RUN)return;return render();}
     const step=STEPS[cur];clr();
     T(30,36,`Step ${cur+1} · ${step.t}`,{fill:"#5aa0c7",size:17,weight:700});
     document.getElementById("methodNarr").innerHTML=step.n(DATA);
