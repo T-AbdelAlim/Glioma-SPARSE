@@ -31,6 +31,7 @@ from pathlib import Path
 import base64
 import io
 import json
+import os
 import re
 import sys
 import time
@@ -69,26 +70,35 @@ HERE = (Path(sys._MEIPASS) if getattr(sys, "frozen", False) and hasattr(sys, "_M
         else Path(sys.executable).resolve().parent if getattr(sys, "frozen", False)
         else Path(__file__).resolve().parent)
 
+# repo root: two levels up from this file, or from dist/GliomaSPARSE-Dashboard/
+# for the frozen exe. GLIOMA_SPARSE_ROOT overrides both (e.g. exe moved elsewhere).
+REPO_ROOT = Path(os.environ.get("GLIOMA_SPARSE_ROOT") or (
+    Path(sys.executable).resolve().parents[2] if getattr(sys, "frozen", False)
+    else Path(__file__).resolve().parents[2]))
+
 # checkpoints are resolved dynamically (see resolve_best_checkpoint): for a
 # given arch+metric, every fold under the relevant training_output* dir is
 # compared on that metric's val score and the winner's best_<metric>.pth is
 # loaded. Stage B pools both stageB dirs (best_auc-derived and best_f1-derived
 # Stage-A patch cohorts) and picks the single best fold across both.
 ARCH_OUTPUT_DIRS = {
-    "resnet18": Path(r"C:\Users\TAbde\PycharmProjects\Glioma-SPARSE\ResNet18_output"),
-    "resnet50": Path(r"C:\Users\TAbde\PycharmProjects\Glioma-SPARSE\ResNet50_output"),
+    "resnet18": REPO_ROOT / "ResNet18_output",
+    "resnet50": REPO_ROOT / "ResNet50_output",
 }
 STAGE_A_SUBDIR = "training_output"
 STAGE_B_SUBDIRS = ["training_output_stageB", "training_output_stageB_F1"]
 METRIC_COLUMN = {"f1": "macro_f1", "auc": "macro_auc", "acc": "accuracy"}
 DEFAULT_METRIC = "f1"
-CONTROL_IMAGE = r"C:\Users\TAbde\PycharmProjects\Glioma-SPARSE\data\included\control\86242943-7775-11eb-827d-001a7dda7111.jpg"
+CONTROL_IMAGE = str(REPO_ROOT / "data" / "included" / "control" / "86242943-7775-11eb-827d-001a7dda7111.jpg")
 
-# preset example slide for the "Methodology explained" walkthrough: a real GBM
-# case, run through the actual pipeline (RN50/RN50, p95, occlusion on) so the
-# walkthrough shows genuine model output identical to Run full pipeline.
-METHODOLOGY_TARGET = r"C:\Users\TAbde\Documents\EMC_postdoc\Virtual_Biopsy\data\WSI_ebrains\WHO2021_data\oligo_IDHmt_1p19qdel_G3\oligo_IDHmt_1p19qdel_G3\a198054a-357f-11eb-bac3-001a7dda7111.ndpi"
-LOGO_PATH = r"C:\Users\TAbde\PycharmProjects\Glioma-SPARSE\docs\logo.png"
+# preset example slide for the "Methodology explained" walkthrough: a real
+# oligodendroglioma, run through the actual pipeline (RN50/RN50, p95, occlusion
+# on). Only read when methodology_cache/ is missing; GLIOMA_SPARSE_METHOD_SLIDE
+# points it at the slide on another machine.
+METHODOLOGY_TARGET = os.environ.get(
+    "GLIOMA_SPARSE_METHOD_SLIDE",
+    r"C:\Users\TAbde\Documents\EMC_postdoc\Virtual_Biopsy\data\WSI_ebrains\WHO2021_data\oligo_IDHmt_1p19qdel_G3\oligo_IDHmt_1p19qdel_G3\a198054a-357f-11eb-bac3-001a7dda7111.ndpi")
+LOGO_PATH = str(REPO_ROOT / "docs" / "logo.png")
 
 GRADE_CLASSES = ["control", "low_grade", "high_grade"]
 SUBTYPE_CLASSES = ["IDH_mt", "IDH_mt_1p19q", "IDH_wt"]
@@ -1227,7 +1237,7 @@ def _permuted_control(seed=SEED, grid=GRID):
     return ctrl_sq, perm_img, permuted, order
 
 
-METHOD_CACHE_DIR = HERE / "methodology_cache"
+METHOD_CACHE_DIR = REPO_ROOT / "scripts" / "dashboard" / "methodology_cache"
 
 
 def _injection_demo(thumbnail, model, target_class, top_cells, grid=GRID, seed=SEED):
