@@ -24,12 +24,19 @@ venv/
 outputs/
 results/
 runs/
+ResNet18_output/
+ResNet50_output/
+training_output*/
+ablation_out/
+scripts/dashboard/methodology_cache/
 
 # Data and trained weights (these never go in git)
 data/
 *.h5
 *.pt
+*.pth
 *.ckpt
+*.zip
 *.svs
 *.ndpi
 *.mrxs

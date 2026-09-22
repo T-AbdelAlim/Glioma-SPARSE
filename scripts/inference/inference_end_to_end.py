@@ -87,8 +87,8 @@ CONFIG = {
 
     # single / folder mode
     "input": r"E:\Thinkpad_Backup\Data\WSI_datasets\TCGA_data_download\manifest_grades\TCGA_ext_val\low_grade\astro_IDHmt_G2",
-    "stage_a_ckpt": r"C:\Users\TAbde\PycharmProjects\Glioma-SPARSE\ResNet18_output\training_output\20260703_0554_resnet18_cw_split_02/best_auc.pth",
-    "stage_b_ckpt": r"C:\Users\TAbde\PycharmProjects\Glioma-SPARSE\ResNet18_output\training_output_stageB\20260705_1203_resnet18_stageB_fold2_cw/best_auc.pth",
+    "stage_a_ckpt": "ResNet18_output/training_output/20260703_0554_resnet18_cw_split_02/best_auc.pth",
+    "stage_b_ckpt": "ResNet18_output/training_output_stageB/20260705_1203_resnet18_stageB_fold2_cw/best_auc.pth",
 
     # testset mode (per-fold, leakage-safe)
     "splits_dir": "splits",
@@ -98,7 +98,7 @@ CONFIG = {
 
     # shared
     "wsi_root": r"C:\Users\TAbde\Documents\EMC_postdoc\Virtual_Biopsy\data\WSI_ebrains\WHO2021_data",
-    "control_image": r"C:\Users\TAbde\PycharmProjects\Glioma-SPARSE\data\included\control\86242943-7775-11eb-827d-001a7dda7111.jpg" ,
+    "control_image": "data/included/control/86242943-7775-11eb-827d-001a7dda7111.jpg",
     "model": "resnet18",
 
     # region selection

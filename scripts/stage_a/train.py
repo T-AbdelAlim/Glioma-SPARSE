@@ -104,12 +104,20 @@ def save_split_csv(paths, splits, csv_path):
             writer.writerow([str(p), s])
 
 
+def _relkey(pth):
+    """Key from data/ onward, so a split CSV written with one machine's absolute
+    paths still matches after the repo is cloned somewhere else."""
+    s = str(pth).replace("\\", "/")
+    i = s.rfind("/data/")
+    return s[i + 1:] if i >= 0 else s
+
+
 def load_split(csv_path):
     split_map = {}
     with open(csv_path, "r") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            split_map[Path(row["path"])] = row["split"]
+            split_map[_relkey(row["path"])] = row["split"]
     return split_map
 
 
@@ -296,7 +304,7 @@ def main():
         train_labels, val_labels, test_labels = [], [], []
 
         for p, l in zip(paths, labels):
-            s = split_map[p]
+            s = split_map[_relkey(p)]
             if s == "train":
                 train_paths.append(p); train_labels.append(l)
             elif s == "val":
@@ -305,7 +313,7 @@ def main():
                 test_paths.append(p); test_labels.append(l)
 
         # keep a copy of the split used, inside this run's output folder
-        save_split_csv(paths, [split_map[p] for p in paths], split_csv)
+        save_split_csv(paths, [split_map[_relkey(p)] for p in paths], split_csv)
         split_source = str(source_csv)
 
     else:

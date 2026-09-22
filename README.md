@@ -31,14 +31,23 @@ The design keeps compute low while preserving diagnostic signal, so the whole pi
 
 ## 1. INSTALLATION
 
-Create the environment:
+Requires Python 3.14 (Windows: `winget install -e --id Python.Python.3.14`). From the repo root:
 
 ```
-conda create -n glioma-sparse python=3.10
-conda activate glioma-sparse
-pip install -r requirements.txt
-pip install -e .
+powershell -ExecutionPolicy Bypass -File setup_env.ps1     # Windows
+bash setup_env.sh                                          # Linux
 ```
+
+This creates `.venv` with the exact package versions of the working environment (`requirements-lock.txt`, PyTorch with CUDA 12.6), installs `glioma_sparse` in editable mode, and finishes with `python -m scripts.check_setup`, which reports whether the environment works and which files that live outside git are still missing (Section 1.1). Activate the environment with `.venv\Scripts\activate` (Windows) or `source .venv/bin/activate` (Linux).
+
+The same pinned environment with conda:
+
+```
+conda env create -f environment.yml
+conda activate glioma-sparse
+```
+
+`requirements.txt` lists the direct dependencies without pins, for machines where the pinned CUDA build does not apply (e.g. macOS or CPU-only; install PyTorch separately first).
 
 ### GPU support
 
@@ -46,13 +55,7 @@ pip install -e .
 python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
 ```
 
-Expect a version tag like `2.x.x+cu121 True`. If it reports `+cpu` or `False`, reinstall PyTorch with a CUDA build matching your driver. The `cu121` and `cu124` wheels ship their own CUDA runtime, so any recent driver works:
-
-```
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-```
-
-The `CUDA Version` shown in `nvidia-smi` is the maximum runtime the driver supports, so a driver reporting a higher version than the wheel is fine.
+Expect `2.12.1+cu126 True`. The CUDA wheels ship their own CUDA runtime, so any recent NVIDIA driver works: the `CUDA Version` shown in `nvidia-smi` is the maximum runtime the driver supports, so a higher version than the wheel is fine. Without an NVIDIA GPU everything still runs on CPU, only slower.
 
 ### Optional dependencies for efficiency logging
 
@@ -62,9 +65,40 @@ pip install nvidia-ml-py thop
 
 `nvidia-ml-py` (imported as `pynvml`) enables GPU energy measurement, and `thop` enables FLOP counting. Both degrade gracefully: without them, the relevant fields are logged as null and everything still runs.
 
-### OpenSlide (Windows)
+### OpenSlide
 
-Download the binaries from https://openslide.org/download/ and add `C:\path\to\openslide\bin` to PATH.
+The OpenSlide library is installed with the `openslide-bin` package; no separate download or PATH entry is needed.
+
+### 1.1 Moving to another machine
+
+Git holds the code only. The following stay behind on a clone and have to be copied into the same place inside the new clone:
+
+| What | Location in the repo | Size | Needed for |
+|---|---|---|---|
+| Trained models | `ResNet18_output/`, `ResNet50_output/` | 2.6 + 5.7 GB | dashboard, inference, aggregation |
+| TCGA-extended runs | `training_output_tcga_ext/`, `training_output_stageB_tcga_ext/` | 1.8 + 1.8 GB | TCGA-extended analyses |
+| Thumbnails | `data/included/` | 0.3 GB | training, dashboard control image |
+| Other data (cohorts, TCGA, test data) | rest of `data/` | ~54 GB | Stage B training, external validation |
+| Dashboard walkthrough cache | `scripts/dashboard/methodology_cache/` | 22 MB | "Methodology explained" without the source slide |
+| Cluster scripts | `cluster_scripts/` | 0.1 MB | SLURM jobs |
+| Earlier inference results | `results/` | 20 GB | reference only |
+| Whole-slide images | outside the repo | – | slide import, Stage B extraction |
+
+With an external drive (here `D:`), from the repo root on the old machine and then the new one:
+
+```
+robocopy ResNet18_output D:\Glioma-SPARSE\ResNet18_output /E
+robocopy ResNet50_output D:\Glioma-SPARSE\ResNet50_output /E
+robocopy data\included D:\Glioma-SPARSE\data\included /E
+robocopy scripts\dashboard\methodology_cache D:\Glioma-SPARSE\scripts\dashboard\methodology_cache /E
+robocopy cluster_scripts D:\Glioma-SPARSE\cluster_scripts /E
+
+robocopy D:\Glioma-SPARSE . /E       # on the new machine, inside the fresh clone
+```
+
+Then run the setup script; `check_setup` confirms what arrived.
+
+The dashboard, the split CSVs and the inference defaults resolve their files relative to the repo, so the clone can live anywhere. Some generated files do store absolute paths from the machine that made them (thumbnail sidecars point to their WSI, Stage B manifests to their patches); these are resolved again from `--wsi-root`/`--wsi-old-prefix`/`--wsi-new-prefix` and `--cohort-dir`. Cloning to the same folder and keeping the WSIs at the same location avoids passing these at all. The dashboard's "Methodology explained" example slide is only read when the cache is missing; point `GLIOMA_SPARSE_METHOD_SLIDE` at it if needed. The standalone `.exe` is not in git either: rebuild it in the new clone with `python scripts\dashboard\build_exe.py` (Section 14.3).
 
 ---
 
@@ -529,4 +563,4 @@ pip install pyinstaller
 python scripts\dashboard\build_exe.py
 ```
 
-Output: `dist/GliomaSPARSE-Dashboard/GliomaSPARSE-Dashboard.exe`. Double-click to launch -- no Python install needed, opens straight into the app window. Checkpoint and data paths (`ARCH_OUTPUT_DIRS`, `CONTROL_IMAGE`, etc. in `scripts/dashboard/backend.py`) are hardcoded absolute paths for this machine, so a built exe is not portable to a machine with a different directory layout; rebuild locally if your checkpoints live elsewhere.
+Output: `dist/GliomaSPARSE-Dashboard/GliomaSPARSE-Dashboard.exe`. Double-click to launch -- no Python install needed, opens straight into the app window. The exe reads the checkpoints, control image and logo relative to the repo it was built in (two folders up from the exe), so keep it inside `dist/` of a clone that has the files from Section 1.1; set `GLIOMA_SPARSE_ROOT` to point it at a repo elsewhere.

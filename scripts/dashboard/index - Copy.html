@@ -1,0 +1,1706 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Glioma-SPARSE</title>
+<link rel="icon" href="/logo.png">
+<style>
+  :root{
+    --bg:#0e1117; --panel:#161b22; --panel2:#1c232d; --line:#2a323d;
+    --ink:#e6edf3; --mut:#8b949e; --accent:#3b82f6; --accent2:#6366f1;
+    --risk:#e11d1d; --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444;
+    --ctrl:#adcba3; --low:#ffe1a8; --high:#e26d5c;
+    --mt:#a8dadc; --cod:#f1faee; --wt:#457b9d;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  header{display:flex;align-items:center;gap:14px;padding:12px 20px;
+    background:var(--panel);border-bottom:1px solid var(--line)}
+  header img{height:34px}
+  header h1{font-size:17px;margin:0;font-weight:600;letter-spacing:.2px}
+  header .sub{color:var(--mut);font-size:12px;margin-left:4px}
+  header .dev{margin-left:auto;font-size:11px;color:var(--mut);
+    padding:4px 10px;border:1px solid var(--line);border-radius:20px}
+  .wrap{display:grid;grid-template-columns:320px 1fr;gap:0;height:calc(100vh - 59px)}
+  .sidebar{background:var(--panel);border-right:1px solid var(--line);
+    padding:16px;overflow-y:auto}
+  .stage-view{position:relative;overflow:hidden;background:
+    radial-gradient(circle at 30% 20%,#131a24,#0e1117 70%)}
+  svg#stage{width:100%;height:100%;display:block}
+  #batchLive{position:absolute;inset:0;background:var(--bg);z-index:5;
+    overflow-y:auto;padding:20px;display:grid;
+    grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:10px;
+    align-content:start}
+  #batchLive.hidden{display:none}
+  .batch-card{position:relative;aspect-ratio:1;border-radius:8px;overflow:hidden;
+    background:var(--panel2);border:1px solid var(--line);cursor:default}
+  .batch-card img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+  .batch-card .bc-overlay{opacity:0;transition:opacity .4s ease}
+  .batch-card .bc-bottom{position:absolute;left:0;right:0;top:0;z-index:1;
+    background:linear-gradient(180deg,rgba(0,0,0,.85) 25%,rgba(0,0,0,.5) 70%,transparent);
+    padding:4px 22px 5px 5px;display:flex;flex-direction:column;gap:1px}
+  .batch-card .bc-dx{font-size:9px;font-weight:700;line-height:1.15;color:#e6edf3;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0;
+    transition:opacity .3s ease}
+  .batch-card .bc-id{font-size:8px;line-height:1.15;color:rgba(255,255,255,.6);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .batch-card .bc-dot{position:absolute;top:5px;right:5px;width:8px;height:8px;
+    border-radius:50%;background:var(--mut);box-shadow:0 0 0 2px rgba(0,0,0,.4);
+    z-index:2}
+  .batch-card.bc-done{cursor:pointer}
+  .batch-card.bc-done:hover{outline:2px solid var(--accent)}
+  .group{margin-bottom:18px}
+  .group h3{font-size:11px;text-transform:uppercase;letter-spacing:.7px;
+    color:var(--mut);margin:0 0 8px}
+  label.row{display:flex;align-items:center;justify-content:space-between;
+    gap:8px;margin:6px 0;font-size:13px}
+  input[type=text]{width:100%;background:var(--panel2);border:1px solid var(--line);
+    color:var(--ink);border-radius:7px;padding:8px 10px;font-size:12px}
+  button{background:var(--accent);color:#fff;border:none;border-radius:7px;
+    padding:9px 12px;font-size:13px;font-weight:500;cursor:pointer;width:100%;
+    transition:.15s;margin-top:6px}
+  button:hover{filter:brightness(1.12)}
+  button.sec{background:var(--panel2);border:1px solid var(--line)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  .seg{display:flex;background:var(--panel2);border:1px solid var(--line);
+    border-radius:7px;overflow:hidden}
+  .seg button{margin:0;border-radius:0;background:transparent;font-size:12px;padding:7px}
+  .seg button.on{background:var(--accent);color:#fff}
+  .toggle{display:flex;align-items:center;gap:8px;cursor:pointer;
+    padding:5px 0;font-size:13px;user-select:none}
+  .toggle .box{width:36px;height:20px;border-radius:20px;background:var(--panel2);
+    border:1px solid var(--line);position:relative;transition:.2s;flex:none}
+  .toggle .box::after{content:"";position:absolute;top:2px;left:2px;width:14px;
+    height:14px;border-radius:50%;background:var(--mut);transition:.2s}
+  .toggle.on .box{background:var(--accent)}
+  .toggle.on .box::after{left:18px;background:#fff}
+  input[type=range]{width:100%;accent-color:var(--accent)}
+  .val{color:var(--accent);font-weight:600;font-variant-numeric:tabular-nums}
+  .status{font-size:12px;color:var(--mut);min-height:18px;margin-top:6px}
+  .spinner{display:inline-block;width:12px;height:12px;border:2px solid var(--line);
+    border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;
+    vertical-align:-2px;margin-right:6px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .diag-bar{position:absolute;left:0;right:0;bottom:0;background:
+    linear-gradient(0deg,#0e1117,rgba(14,17,23,.85) 70%,transparent);
+    padding:18px 24px;pointer-events:none}
+  .diag-bar .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:var(--mut)}
+  .diag-bar .dx{font-size:22px;font-weight:700;margin-top:2px;color:#ffffff;
+    text-shadow:0 1px 3px rgba(0,0,0,.6)}
+  .diag-bar .conf{font-size:13px;color:var(--mut);margin-top:2px}
+  .legend{position:absolute;top:14px;right:16px;background:rgba(22,27,34,.9);
+    border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:11px;
+    max-width:210px}
+  .legend .k{display:flex;align-items:center;gap:6px;margin:3px 0}
+  .legend .sw{width:11px;height:11px;border-radius:3px;flex:none}
+  .pill{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;
+    font-weight:600}
+  .card{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
+    padding:10px;margin-top:8px;font-size:12px}
+  .card .k{color:var(--mut)}
+  .bars{margin-top:4px}
+  .bar{display:flex;align-items:center;gap:6px;margin:3px 0}
+  .bar .name{width:78px;color:var(--mut);font-size:11px}
+  .bar .track{flex:1;height:8px;background:var(--panel);border-radius:5px;overflow:hidden}
+  .bar .fill{height:100%;border-radius:5px;transition:width .5s ease}
+  .bar .pct{width:34px;text-align:right;font-variant-numeric:tabular-nums;font-size:11px}
+  .hidden{display:none !important;}
+</style>
+</head>
+<body>
+<header>
+  <img src="/logo.png" alt="Glioma-SPARSE" onerror="this.style.display='none'">
+  <h1>Glioma-SPARSE <span class="sub">interactive pipeline</span></h1>
+  <button id="btnMethod" style="margin-left:auto;width:auto;padding:8px 16px;font-size:13px">
+    📖 Methodology explained</button>
+  <div class="dev" id="dev">device: …</div>
+</header>
+
+<!-- METHODOLOGY WALKTHROUGH -->
+<div id="methodModal" class="hidden" style="position:fixed;inset:0;z-index:40;
+  background:rgba(8,11,16,.97);display:flex;flex-direction:column;padding:18px 24px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+    <div>
+      <div style="font-size:17px;font-weight:700">How Glioma-SPARSE works</div>
+      <div id="methodSub" style="font-size:12px;color:var(--mut)">a two-stage weakly-supervised pipeline</div>
+    </div>
+    <button onclick="closeMethod()" class="sec" style="width:auto;margin:0;padding:8px 14px">✕ Close</button>
+  </div>
+  <div style="flex:1;position:relative;background:#0b0e13;border:1px solid var(--line);
+    border-radius:12px;overflow:hidden">
+    <svg id="methodStage" viewBox="0 0 1000 620" preserveAspectRatio="xMidYMid meet"
+      style="width:100%;height:100%"></svg>
+  </div>
+  <div id="methodNarr" style="margin:10px 2px;font-size:13.5px;line-height:1.5;
+    min-height:44px;color:var(--ink)"></div>
+  <div style="display:flex;align-items:center;gap:12px">
+    <button id="mPrev" class="sec" style="width:auto;margin:0;padding:8px 16px">← Prev</button>
+    <button id="mPlay" style="width:auto;margin:0;padding:8px 20px">▶ Play</button>
+    <button id="mNext" class="sec" style="width:auto;margin:0;padding:8px 16px">Next →</button>
+    <div id="mDots" style="display:flex;gap:6px;margin-left:8px"></div>
+    <div id="mStepLbl" style="margin-left:auto;font-size:12px;color:var(--mut)"></div>
+  </div>
+</div>
+
+<div class="wrap">
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+    <div class="group">
+      <h3>1 · Import slide</h3>
+      <div style="display:flex;gap:6px">
+        <input type="text" id="slidePath" placeholder="C:\path\to\slide.ndpi" style="flex:1">
+        <button id="btnBrowse" class="sec" style="width:auto;margin-top:0;padding:8px 12px;white-space:nowrap">Browse…</button>
+      </div>
+      <button id="btnImport" disabled>Build thumbnail</button>
+      <div class="status" id="importStatus"></div>
+    </div>
+
+    <div class="group">
+      <h3>2 · Models (fold locked: split_02)</h3>
+      <label class="row">Stage A
+        <span class="seg" id="segA">
+          <button data-a="resnet18">RN18</button>
+          <button data-a="resnet50" class="on">RN50</button>
+        </span>
+      </label>
+      <label class="row">Stage B
+        <span class="seg" id="segB">
+          <button data-b="resnet18">RN18</button>
+          <button data-b="resnet50" class="on">RN50</button>
+        </span>
+      </label>
+    </div>
+
+    <div class="group">
+      <h3>3 · Parameters</h3>
+      <label class="row">Risk percentile <span class="val" id="pctVal">95</span></label>
+      <input type="range" id="pct" min="80" max="97" value="95" step="1">
+      <div class="status" id="pctInfo" style="margin-top:2px">top 5% → up to 4 of 64 tiles into Stage B</div>
+      <div class="toggle on" id="tSignal" style="margin-top:10px"><div class="box"></div>Signal map overlay</div>
+      <div class="toggle on" id="tPred"><div class="box"></div>Class predictions</div>
+      <div class="toggle" id="tRaw"><div class="box"></div>Raw values (p, uncertainty)</div>
+      <div class="toggle" id="tOccl"><div class="box"></div>Stage B occlusion heatmap</div>
+    </div>
+
+    <div class="group">
+      <h3>4 · Run</h3>
+      <button id="btnRun" disabled>▶ Run full pipeline</button>
+      <button class="sec" id="btnReplay" disabled>↻ Replay animation</button>
+      <div id="runProg" class="hidden" style="margin-top:8px">
+        <div style="height:8px;background:var(--panel2);border:1px solid var(--line);
+          border-radius:5px;overflow:hidden">
+          <div id="runBar" style="height:100%;width:0%;background:var(--accent);
+            transition:width .3s ease"></div>
+        </div>
+        <div id="runProgTxt" style="font-size:11px;color:var(--mut);margin-top:4px"></div>
+      </div>
+      <div class="status" id="runStatus"></div>
+    </div>
+
+    <div class="group">
+      <h3>5 · Export &amp; load</h3>
+      <button class="sec" id="btnSave" disabled>💾 Save results</button>
+      <div class="status" id="saveStatus"></div>
+      <button class="sec" id="btnLoad" style="margin-top:10px">📂 Load previous result</button>
+      <div class="status" id="loadStatus"></div>
+    </div>
+
+    <div class="group">
+      <h3>6 · Batch processing</h3>
+      <button class="sec" id="btnBatchIn">📁 Input folder…</button>
+      <div class="status" id="batchInStatus"></div>
+      <div class="toggle" id="tRecursive" style="margin-top:6px"><div class="box"></div>Search subfolders (recursive)</div>
+      <div class="toggle on" id="tSavePatches" style="margin-top:6px"><div class="box"></div>Save full-res patch JPGs</div>
+      <button class="sec" id="btnBatchOut" style="margin-top:8px">📂 Output location…</button>
+      <div class="status" id="batchOutStatus"></div>
+      <button id="btnBatchRun" style="margin-top:8px" disabled>▶ Run batch</button>
+      <div id="batchProg" class="hidden" style="margin-top:8px">
+        <div style="height:8px;background:var(--panel2);border:1px solid var(--line);
+          border-radius:5px;overflow:hidden">
+          <div id="batchBar" style="height:100%;width:0%;background:var(--accent);
+            transition:width .3s ease"></div>
+        </div>
+        <div id="batchProgTxt" style="font-size:11px;color:var(--mut);margin-top:4px"></div>
+      </div>
+      <div class="status" id="batchStatus"></div>
+      <button class="sec" id="btnBatchOpen" style="margin-top:8px">📊 Open batch run…</button>
+      <div class="status" id="batchOpenStatus"></div>
+    </div>
+  </div>
+
+  <!-- STAGE -->
+  <div class="stage-view">
+    <svg id="stage" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid meet"></svg>
+    <div id="batchLive" class="hidden"></div>
+    <div class="legend" id="legend">
+      <div style="font-weight:600;margin-bottom:5px">Grade</div>
+      <div class="k"><span class="sw" style="background:var(--ctrl)"></span>control</div>
+      <div class="k"><span class="sw" style="background:var(--low)"></span>low grade</div>
+      <div class="k"><span class="sw" style="background:var(--high)"></span>high grade</div>
+      <div style="font-weight:600;margin:6px 0 5px">Molecular</div>
+      <div class="k"><span class="sw" style="background:var(--mt)"></span>IDH-mt astro</div>
+      <div class="k"><span class="sw" style="background:var(--cod)"></span>IDH-mt 1p/19q</div>
+      <div class="k"><span class="sw" style="background:var(--wt)"></span>IDH-wt</div>
+    </div>
+    <div class="diag-bar">
+      <div class="lbl">Integrated diagnosis</div>
+      <div class="dx" id="dxText">—</div>
+      <div class="conf" id="dxConf"></div>
+      <div class="conf" id="dxProv" style="opacity:.75;font-size:11px"></div>
+      <button id="btnBackToBatch" class="hidden sec" style="position:absolute;
+        right:24px;bottom:22px;width:auto;margin:0;padding:8px 14px;font-size:12px;
+        pointer-events:auto;box-shadow:0 4px 14px rgba(0,0,0,.4)">← Back to batch results</button>
+    </div>
+    <!-- batch results overlay -->
+    <div id="batchPanel" class="hidden" style="position:absolute;inset:0;
+      background:rgba(8,11,16,.94);z-index:20;display:flex;align-items:center;
+      justify-content:center;padding:30px">
+      <div style="background:var(--panel);border:1px solid var(--line);border-radius:12px;
+        max-width:820px;width:100%;max-height:100%;overflow:auto;padding:20px">
+        <div style="display:flex;justify-content:space-between;align-items:start">
+          <h2 id="batchTitle" style="margin:0;font-size:16px">Batch run</h2>
+          <button onclick="closeBatchTable()"
+            style="width:auto;margin:0;padding:6px 12px" class="sec">✕ Close</button>
+        </div>
+        <div id="batchMeta" style="font-size:12px;color:var(--mut);margin:6px 0 12px"></div>
+        <div id="batchTable"></div>
+      </div>
+    </div>
+
+    <!-- click-to-inspect overlay -->
+    <div id="inspect" class="hidden" style="position:absolute;inset:0;
+      background:rgba(8,11,16,.92);z-index:20;align-items:center;
+      justify-content:center;padding:30px">
+      <div style="background:var(--panel);border:1px solid var(--line);border-radius:12px;
+        max-width:860px;width:100%;max-height:100%;overflow:auto;padding:20px;display:flex;gap:20px">
+        <div style="flex:none">
+          <svg id="inspSvg" width="380" height="380" viewBox="0 0 380 380"
+            style="border-radius:8px;border:1px solid var(--line);display:block">
+            <image id="inspImg" x="0" y="0" width="380" height="380"/>
+            <g id="inspOccl"></g>
+          </svg>
+          <div id="inspZoomWrap" class="hidden" style="margin-top:10px">
+            <div style="font-size:11px;color:var(--mut);margin-bottom:4px">
+              Top occlusion cell · level-0 zoom</div>
+            <img id="inspZoom" style="width:180px;height:180px;border-radius:6px;
+              border:2px solid #fde047;object-fit:cover">
+          </div>
+        </div>
+        <div style="flex:1;min-width:220px">
+          <div style="display:flex;justify-content:space-between;align-items:start">
+            <h2 id="inspTitle" style="margin:0;font-size:16px">Patch</h2>
+            <button onclick="closeInspect()" style="width:auto;margin:0;padding:6px 12px"
+              class="sec">✕ Close</button>
+          </div>
+          <div id="inspMeta" class="card"></div>
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:.7px;
+            color:var(--mut);margin:14px 0 6px">Stage B molecular prediction</div>
+          <div id="inspBars"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const SVGNS="http://www.w3.org/2000/svg";
+const API=(p,b)=>fetch("/api/"+p,{method:"POST",headers:{"Content-Type":"application/json"},
+  body:JSON.stringify(b)}).then(async r=>{if(!r.ok)throw new Error((await r.json()).detail||r.statusText);return r.json()});
+const $=id=>document.getElementById(id);
+const el=(t,a={})=>{const e=document.createElementNS(SVGNS,t);for(const k in a)e.setAttribute(k,a[k]);return e};
+let INSTANT=false;
+const sleep=ms=>INSTANT?Promise.resolve():new Promise(r=>setTimeout(r,ms));
+// fade an element in; in INSTANT mode set the final opacity directly (a
+// 0-duration WAAPI animation does not reliably commit before paint).
+function fadeIn(elem,to=1,{duration=350,delay=0}={}){
+  if(INSTANT){elem.setAttribute("opacity",to);return;}
+  elem.setAttribute("opacity","0");
+  elem.animate([{opacity:0},{opacity:to}],{duration,delay,fill:"forwards"});
+}
+const COL={control:"#adcba3",low_grade:"#ffe1a8",high_grade:"#e26d5c",
+  IDH_mt:"#a8dadc",IDH_mt_1p19q:"#f1faee",IDH_wt:"#457b9d"};
+// text colour that stays legible on each fill (light fills need dark ink)
+const INK={control:"#3a3a2e",low_grade:"#6b4e18",high_grade:"#fff",
+  IDH_mt:"#1d3a3d",IDH_mt_1p19q:"#2a3a30",IDH_wt:"#fff"};
+
+let S={session:null,archA:"resnet50",archB:"resnet50",
+  signal:true,pred:true,raw:false,occl:false,
+  thumb:null,thumbSize:2048,thumbW:2048,thumbH:2048,wsiDim:null,tissueInThumb:null,
+  gridR:8,gridC:8,
+  selected:[],risk:null,lastRun:null,
+  lastCfg:null,_fadeInKeys:null,_occlRevealOnly:false,
+  patchCache:{},occlCache:{},occlAvailable:true,savePatches:true};   // key "r_c" -> patch record / occlusion, reused across percentile changes
+const ARCH_LABEL={resnet18:"ResNet18",resnet50:"ResNet50"};
+
+// ---- config ----
+API("../api/config",{}).catch(()=>fetch("/api/config").then(r=>r.json())).then(()=>{});
+fetch("/api/config").then(r=>r.json()).then(c=>{$("dev").textContent="device: "+c.device;});
+
+// ---- toggles & segments ----
+function bindToggle(id,key){$(id).onclick=()=>{S[key]=!S[key];$(id).classList.toggle("on",S[key]);
+  if(S.lastRun)renderStatic();}}
+bindToggle("tSignal","signal");bindToggle("tPred","pred");bindToggle("tRaw","raw");
+$("tOccl").onclick=async()=>{
+  S.occl=!S.occl;$("tOccl").classList.toggle("on",S.occl);
+  if(!S.lastRun)return;
+  if(S.occl){
+    if(!S.session){renderStatic();return;}   // loaded result: no live model
+    const need=S.lastRun.patches.filter(p=>!S.lastRun.occl[p.row+"_"+p.col]);
+    if(need.length){
+      $("tOccl").style.pointerEvents="none";$("tOccl").style.opacity=".6";
+      showBusy(`Computing occlusion maps… 0/${need.length}`);
+      const st=$("runStatus");
+      let done=0;
+      for(const p of need){
+        setBusy(`Computing occlusion maps… ${done}/${need.length} (r${p.row}c${p.col})`);
+        st.innerHTML=`<span class="spinner"></span>occlusion r${p.row}c${p.col}…`;
+        S.lastRun.occl[p.row+"_"+p.col]=await API("stage_b_occlusion",
+          {session_id:S.session,row:p.row,col:p.col,arch:S.archB});
+        done++;
+      }
+      st.textContent="✓ occlusion ready";
+      hideBusy();
+      $("tOccl").style.pointerEvents="";$("tOccl").style.opacity="";
+    }
+  }
+  // gentle reveal: ease the occlusion overlay in rather than snapping, without
+  // re-fading the patches themselves.
+  S._occlRevealOnly=true;
+  await renderStatic();
+  S._occlRevealOnly=false;
+};
+
+// on-canvas busy overlay for slow compute (occlusion), so it's obvious work is
+// happening rather than the UI appearing frozen.
+function showBusy(msg){
+  let b=$("busy");
+  if(!b){
+    b=document.createElement("div");b.id="busy";
+    b.style.cssText="position:absolute;top:16px;left:50%;transform:translateX(-50%);"+
+      "z-index:15;background:rgba(22,27,34,.95);border:1px solid var(--line);"+
+      "border-radius:10px;padding:10px 16px;font-size:13px;display:flex;"+
+      "align-items:center;gap:10px;box-shadow:0 6px 20px rgba(0,0,0,.4)";
+    document.querySelector(".stage-view").appendChild(b);
+  }
+  b.innerHTML=`<span class="spinner"></span><span id="busyMsg">${msg}</span>`;
+  b.style.display="flex";
+}
+function setBusy(msg){const m=$("busyMsg");if(m)m.textContent=msg;}
+function hideBusy(){const b=$("busy");if(b)b.style.display="none";}
+
+// enable/disable the Stage B occlusion toggle (disabled for loaded results that
+// have no occlusion data saved)
+function setOcclToggleEnabled(on){
+  const t=$("tOccl");
+  if(on){t.style.pointerEvents="";t.style.opacity="";t.title="";}
+  else{t.style.pointerEvents="none";t.style.opacity=".4";
+    t.title="No Stage B occlusion data in this result (run batch with occlusion on to include it)";}
+}
+
+// rough single-run progress bar under Replay
+function runProgress(frac,label){
+  const bar=$("runBar"),wrap=$("runProg"),txt=$("runProgTxt");
+  if(frac==null){wrap.classList.add("hidden");return;}
+  wrap.classList.remove("hidden");
+  bar.style.width=Math.round(frac*100)+"%";
+  txt.textContent=label||"";
+}
+$("segA").onclick=e=>{if(e.target.dataset.a){S.archA=e.target.dataset.a;
+  [...$("segA").children].forEach(b=>b.classList.toggle("on",b.dataset.a===S.archA));}};
+$("segB").onclick=e=>{if(e.target.dataset.b){S.archB=e.target.dataset.b;
+  [...$("segB").children].forEach(b=>b.classList.toggle("on",b.dataset.b===S.archB));}};
+$("pct").oninput=e=>{
+  $("pctVal").textContent=e.target.value;
+  const pct=+e.target.value, ncell=S.gridR*S.gridC;
+  const maxT=Math.max(1,Math.ceil(ncell*(100-pct)/100));
+  $("pctInfo").textContent=`top ${100-pct}% → up to ${maxT} of ${ncell} tiles into Stage B`;
+};
+// live incremental update when the slider is released (not on every pixel).
+// Raising the percentile only removes tiles (no compute); lowering extracts the
+// new ones with a clear progress state, then re-runs Stage B and re-renders.
+$("pct").onchange=async()=>{
+  if(!S.session||!S.lastRun)return;   // nothing to update until a full run exists
+  const pct=+$("pct").value;
+  if(S.lastCfg&&S.lastCfg.pct===pct)return;
+  await livePercentile(pct);
+};
+
+// smooth transition between percentile settings: fade removed tiles out, then
+// re-render, then fade the newly-added patches in.
+async function transitionPercentile(removed,added){
+  const svg=$("stage");
+  if(removed.length){
+    const fades=[];
+    removed.forEach(p=>{
+      svg.querySelectorAll(`[data-tile="${p.row}_${p.col}"]`).forEach(elm=>{
+        const a=elm.animate([{opacity:getComputedStyle(elm).opacity||1},{opacity:0}],
+          {duration:350,fill:"forwards"});
+        fades.push(a.finished.catch(()=>{}));
+      });
+    });
+    await Promise.allSettled(fades);
+  }
+  S._fadeInKeys=new Set(added.map(s=>s.row+"_"+s.col));
+  await renderStatic();
+  S._fadeInKeys=null;
+}
+
+async function livePercentile(pct){
+  const st=$("runStatus");
+  try{
+    // re-select at the new percentile (backend reuses the cached risk map)
+    const R=await API("risk_map",{session_id:S.session,percentile:pct,cap:0});
+    S.selected=R.selected;S.risk=R;
+    const prev={};for(const p of S.lastRun.patches) prev[p.row+"_"+p.col]=p;
+    const newKeys=R.selected.map(s=>s.row+"_"+s.col);
+    const removed=S.lastRun.patches.filter(p=>!newKeys.includes(p.row+"_"+p.col));
+    // a tile is "new to the view" if not currently shown; but it may still be in
+    // the session cache (extracted at an earlier percentile) — those are free.
+    const added=R.selected.filter(s=>!prev[s.row+"_"+s.col]);
+    const toExtract=added.filter(s=>!S.patchCache[s.row+"_"+s.col]);
+
+    if(toExtract.length){
+      st.innerHTML=`<span class="spinner"></span>extracting ${toExtract.length} new tile${toExtract.length>1?"s":""}…`;
+    }
+    const patches=[];
+    for(const sel of R.selected){
+      const key=sel.row+"_"+sel.col;
+      if(prev[key]){patches.push(prev[key]);continue;}       // already shown
+      if(S.patchCache[key]){patches.push(S.patchCache[key]);continue;} // cached, free
+      st.innerHTML=`<span class="spinner"></span>extracting r${sel.row}c${sel.col}…`;
+      const E=await API("extract",{session_id:S.session,row:sel.row,col:sel.col});
+      const rec={...sel,...E};patches.push(rec);S.patchCache[key]=rec;
+    }
+    // Stage B over the new tile set (fast: one pass per tile)
+    st.innerHTML='<span class="spinner"></span>Stage B molecular…';
+    const B=await API("stage_b",{session_id:S.session,arch:S.archB});
+    // occlusion: reuse cache; compute only for tiles that still lack it
+    let occl={};
+    if(S.occl){
+      for(const sel of R.selected){
+        const key=sel.row+"_"+sel.col;
+        if(S.occlCache[key]){occl[key]=S.occlCache[key];continue;}
+        st.innerHTML=`<span class="spinner"></span>occlusion r${sel.row}c${sel.col}…`;
+        occl[key]=await API("stage_b_occlusion",
+          {session_id:S.session,row:sel.row,col:sel.col,arch:S.archB});
+        S.occlCache[key]=occl[key];
+      }
+    }
+    const I=await API("integrate",{session_id:S.session,arch:S.archB});
+    S.lastRun={A:S.lastRun.A,R,patches,B,occl,I};S.lastCfg={...S.lastCfg,pct};
+    st.textContent=`✓ ${patches.length} tile${patches.length>1?"s":""}`;
+    // fade in only tiles that are genuinely new to the view
+    await transitionPercentile(removed,added);
+  }catch(e){st.textContent="✕ "+e.message;}
+}
+
+// ---- browse (native OS dialog via backend) ----
+$("slidePath").addEventListener("input",()=>{
+  $("btnImport").disabled=!$("slidePath").value.trim();
+});
+$("btnBrowse").onclick=async()=>{
+  $("importStatus").innerHTML='<span class="spinner"></span>opening file dialog…';
+  try{
+    const r=await API("browse",{});
+    if(r.path){$("slidePath").value=r.path;$("importStatus").textContent="✓ selected";
+      $("btnImport").disabled=false;}
+    else{$("importStatus").textContent="no file chosen";}
+  }catch(e){$("importStatus").textContent="✕ "+e.message+" — paste a path instead";}
+};
+
+// ---- import ----
+$("btnImport").onclick=async()=>{
+  const path=$("slidePath").value.trim();
+  if(!path){$("importStatus").textContent="enter a slide path";return;}
+  $("importStatus").innerHTML='<span class="spinner"></span>building thumbnail…';
+  $("btnImport").disabled=true;
+  try{
+    const r=await API("import",{slide_path:path});
+    S.session=r.session_id;S.thumb=r.thumbnail;S.thumbSize=r.thumbnail_size;
+    S.thumbW=r.thumbnail_w||r.thumbnail_size;S.thumbH=r.thumbnail_h||r.thumbnail_size;
+    S.wsiDim=r.wsi_level0_dim||null;
+    S.tissueInThumb=r.tissue_in_thumb||null;
+    S.selected=[];S.risk=null;S.lastRun=null;
+    hideBatchLive();
+    S.patchCache={};S.occlCache={};S.lastCfg=null;
+    S.occlAvailable=true;setOcclToggleEnabled(true);   // live session can compute occlusion
+    $("importStatus").innerHTML=`✓ ${r.slide_id} · tissue ${(r.tissue_fraction*100).toFixed(0)}% · ${r.elapsed_sec}s`
+      +`<br><span style="color:var(--mut)">saves to ${r.gs_dir.split(/[\\/]/).pop()} on Save</span>`;
+    $("btnRun").disabled=false;$("btnSave").disabled=true;$("btnReplay").disabled=true;
+    drawInitial();
+  }catch(e){$("importStatus").textContent="✕ "+e.message;}
+  $("btnImport").disabled=false;
+};
+
+// ---- layout coordinates on the 1200x800 canvas ----
+const L={
+  thumb:{x:30,y:70,s:360},
+  wsiMap:{x:430,y:70,w:150},              // WSI-aspect overview, centre column
+  patchArea:{x:640,y:60,w:300,h:690},     // patches laid out adaptively here
+  stageB:{x:960,y:370,w:210,h:80},
+};
+
+// choose a grid (cols x rows) and patch size so n patches fit patchArea
+function patchLayout(n){
+  const A=L.patchArea;
+  let cols=1;
+  if(n<=2)cols=1; else if(n<=6)cols=2; else if(n<=12)cols=3; else cols=4;
+  const rows=Math.ceil(n/cols);
+  const gap=10;
+  const s=Math.min((A.w-(cols-1)*gap)/cols, (A.h-(rows-1)*gap)/rows);
+  const positions=[];
+  for(let i=0;i<n;i++){
+    const c=i%cols, r=Math.floor(i/cols);
+    positions.push({x:A.x+c*(s+gap), y:A.y+r*(s+gap), s});
+  }
+  return {positions,s,cols,rows};
+}
+
+function drawInitial(){
+  const svg=$("stage");svg.innerHTML="";
+  // thumbnail
+  const g=el("g");svg.appendChild(g);
+  const img=el("image",{href:S.thumb,x:L.thumb.x,y:L.thumb.y,
+    width:L.thumb.s,height:L.thumb.s,rx:8});
+  img.setAttribute("opacity","0");g.appendChild(img);
+  img.animate([{opacity:0},{opacity:1}],{duration:500,fill:"forwards"});
+  label(svg,L.thumb.x,L.thumb.y-12,`Thumbnail (${S.thumbW}×${S.thumbH} px, 4.0 µm/px)`);
+  $("dxText").textContent="—";$("dxConf").textContent="";
+}
+function label(svg,x,y,t,color="#8b949e"){
+  const e=el("text",{x,y,fill:color,"font-size":13,"font-weight":600});
+  e.textContent=t;svg.appendChild(e);return e;}
+
+// ---- run full pipeline with animation ----
+$("btnRun").onclick=()=>runPipeline(true);
+$("btnReplay").onclick=()=>{if(S.lastRun)animateFrom(S.lastRun);};
+
+// live progressive preview drawn on the main #stage during a run, so stages
+// appear as they compute instead of a blank canvas until the end. Uses the same
+// signal-map colors; the polished animateFrom plays once everything is ready.
+function livePreview(phase, data){
+  const svg=$("stage");const NS="http://www.w3.org/2000/svg";
+  const mk=(t,a)=>{const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);return e;};
+  const RISKC=["#4575b4","#74add1","#abd9e9","#e0f3f8","#fee090","#fdae61","#f46d43","#d73027"];
+  const rc=v=>RISKC[Math.min(7,Math.max(0,Math.round(v*7)))];
+  if(phase==="thumb"){
+    svg.innerHTML="";
+    svg.appendChild(mk("image",{href:S.thumb,x:120,y:120,width:420,height:420}));
+    svg.appendChild(mk("rect",{x:120,y:120,width:420,height:420,fill:"none",stroke:"#2a323d"}));
+    const t=mk("text",{x:330,y:100,fill:"#8b949e","font-size":16,"text-anchor":"middle"});
+    t.textContent="Thumbnail · 2048×2048 px · Stage A grading…";svg.appendChild(t);
+  }else if(phase==="signal"){
+    // clear the plain thumbnail + its label first, then show ONLY the signal map
+    svg.innerHTML="";
+    const R=data;const gr=R.grid_rows||8,gc=R.grid_cols||8,cw=420/gc,ch=420/gr;
+    for(let r=0;r<gr;r++)for(let c=0;c<gc;c++){
+      const e=mk("rect",{x:120+c*cw,y:120+r*ch,width:cw,height:ch,fill:rc(R.risk_grid[r][c]),
+        "stroke":"#0b0e13","stroke-width":0.4,opacity:0});svg.appendChild(e);
+      e.animate([{opacity:0},{opacity:.9}],{duration:220,delay:(r*gc+c)*8,fill:"forwards"});}
+    const t=mk("text",{x:330,y:100,fill:"#e6edf3","font-size":16,"text-anchor":"middle"});
+    t.textContent="Stage A signal map";svg.appendChild(t);
+    (R.selected||[]).forEach(s=>svg.appendChild(mk("rect",{x:120+s.col*cw,y:120+s.row*ch,
+      width:cw,height:ch,fill:"none",stroke:"#e11d1d","stroke-width":2.5})));
+  }else if(phase==="patch"){
+    const py=140+data.i*150;
+    if(py<720){
+      const g=mk("g",{opacity:0});svg.appendChild(g);
+      g.appendChild(mk("image",{href:data.patch.patch||data.patch,x:640,y:py,width:130,height:130}));
+      g.appendChild(mk("rect",{x:640,y:py,width:130,height:130,fill:"none",stroke:"#3b82f6","stroke-width":1.6}));
+      g.animate([{opacity:0},{opacity:1}],{duration:300,fill:"forwards"});
+      if(data.i===0){const t=mk("text",{x:705,y:125,fill:"#e6edf3","font-size":15,"text-anchor":"middle"});
+        t.textContent="Extracting high-signal patches…";svg.appendChild(t);}
+    }
+  }else if(phase==="stageB"){
+    const t=mk("text",{x:930,y:400,fill:"#6366f1","font-size":15,"text-anchor":"middle","font-weight":700});
+    t.textContent="Stage B molecular profiling…";svg.appendChild(t);
+    const t2=mk("text",{x:930,y:424,fill:"#8b949e","font-size":12,"text-anchor":"middle"});
+    t2.textContent="IDH / 1p19q status";svg.appendChild(t2);
+  }
+}
+
+async function runPipeline(animate){
+  if(!S.session)return;
+  const st=$("runStatus");
+  $("btnRun").disabled=true;
+  // grey out the methodology button so it can't interrupt a running analysis
+  $("btnMethod").disabled=true;$("btnMethod").style.opacity=".45";
+  $("btnMethod").style.pointerEvents="none";
+  const pct=+$("pct").value;
+  const cfg={archA:S.archA,archB:S.archB,pct};
+  const prev=S.lastCfg;
+  const archAchanged = !prev || prev.archA!==cfg.archA;
+  const archBchanged = !prev || prev.archB!==cfg.archB;
+  const pctChanged   = !prev || prev.pct!==cfg.pct;
+  try{
+    if(animate&&S.thumb)livePreview("thumb");
+    runProgress(0.05,"Stage A grade…");
+    // Stage A + risk map: recompute only if the Stage A model changed.
+    let A=S.lastRun&&!archAchanged?S.lastRun.A:null;
+    if(!A){st.innerHTML='<span class="spinner"></span>Stage A grade…';
+      A=await API("stage_a",{session_id:S.session,arch:S.archA});}
+    runProgress(0.12,"Stage A signal map…");
+    st.innerHTML='<span class="spinner"></span>Stage A signal map…';
+    const R=await API("risk_map",{session_id:S.session,percentile:pct,cap:0});
+    S.selected=R.selected;S.risk=R;S.gridR=R.grid_rows||8;S.gridC=R.grid_cols||8;
+    if(animate)livePreview("signal",R);
+    runProgress(0.30,`selected ${R.selected.length} tiles`);
+
+    // Extract patches: reuse any already extracted this session (backend caches
+    // by row/col); only new tiles cost a WSI read. If archA changed the
+    // selection may differ, so we key reuse on (row,col).
+    // model change invalidates the cross-percentile caches (patches survive a
+    // Stage A change only if selection identical, so simplest: clear on archA;
+    // occlusion depends on archB, clear on archB).
+    if(archAchanged){S.patchCache={};S.occlCache={};}
+    if(archBchanged){S.occlCache={};}
+
+    const prevPatches={};
+    if(S.lastRun&&!archAchanged) for(const p of S.lastRun.patches) prevPatches[p.row+"_"+p.col]=p;
+    const patches=[];
+    const nTiles=R.selected.length;
+    for(let ti=0;ti<R.selected.length;ti++){
+      const sel=R.selected[ti];
+      const key=sel.row+"_"+sel.col;
+      runProgress(0.30+0.40*(ti/Math.max(1,nTiles)),`extracting tile ${ti+1}/${nTiles}`);
+      if(prevPatches[key]){patches.push(prevPatches[key]);continue;}
+      if(S.patchCache[key]){patches.push(S.patchCache[key]);continue;}   // session cache
+      st.innerHTML=`<span class="spinner"></span>extracting r${sel.row}c${sel.col}…`;
+      const E=await API("extract",{session_id:S.session,row:sel.row,col:sel.col});
+      const rec={...sel,...E};patches.push(rec);S.patchCache[key]=rec;
+      if(animate)livePreview("patch",{i:ti,total:nTiles,patch:rec});
+    }
+    if(animate)livePreview("stageB");
+    runProgress(0.72,"Stage B molecular…");
+
+    // Stage B: re-run if archB changed OR the tile set changed; else reuse.
+    let B;
+    const tilesChanged = !S.lastRun || S.lastRun.patches.length!==patches.length ||
+      patches.some((p,i)=>!S.lastRun.patches[i]||S.lastRun.patches[i].row!==p.row||S.lastRun.patches[i].col!==p.col);
+    if(!archBchanged && !tilesChanged && S.lastRun){B=S.lastRun.B;}
+    else{st.innerHTML='<span class="spinner"></span>Stage B molecular…';
+      B=await API("stage_b",{session_id:S.session,arch:S.archB});}
+
+    // Occlusion: reuse session cache; compute only tiles that lack it.
+    let occl={};
+    if(S.occl){
+      runProgress(0.80,"occlusion maps…");
+      const occNeed=R.selected.filter(sel=>!S.occlCache[sel.row+"_"+sel.col]);
+      let oi=0;
+      for(const sel of R.selected){
+        const key=sel.row+"_"+sel.col;
+        if(S.occlCache[key]){occl[key]=S.occlCache[key];continue;}
+        st.innerHTML=`<span class="spinner"></span>occlusion r${sel.row}c${sel.col}…`;
+        runProgress(0.80+0.15*(oi/Math.max(1,occNeed.length)),
+          `occlusion ${oi+1}/${occNeed.length}`);
+        occl[key]=await API("stage_b_occlusion",
+          {session_id:S.session,row:sel.row,col:sel.col,arch:S.archB});
+        S.occlCache[key]=occl[key];oi++;
+      }
+    }
+    runProgress(0.97,"integrating…");
+    const I=await API("integrate",{session_id:S.session,arch:S.archB});
+    S.lastRun={A,R,patches,B,occl,I};S.lastCfg=cfg;
+    runProgress(1.0,"complete");
+    st.textContent="✓ complete";
+    $("btnSave").disabled=false;$("btnReplay").disabled=false;
+    if(animate)await animateFrom(S.lastRun); else renderStatic();
+    setTimeout(()=>runProgress(null),800);   // hide bar shortly after
+  }catch(e){st.textContent="✕ "+e.message;runProgress(null);}
+  $("btnRun").disabled=false;
+  $("btnMethod").disabled=false;$("btnMethod").style.opacity="";
+  $("btnMethod").style.pointerEvents="";
+}
+
+// ---- probability bars helper (SVG) ----
+function probBars(svg,x,y,probs,colors,w=150){
+  const keys=Object.keys(probs);const bh=14,gap=4;
+  keys.forEach((k,i)=>{
+    const yy=y+i*(bh+gap);
+    svg.appendChild(el("rect",{x,y:yy,width:w,height:bh,rx:4,fill:"#1c232d"}));
+    const fill=el("rect",{x,y:yy,width:0,height:bh,rx:4,fill:colors[k]||"#3b82f6",
+      stroke:"#0e1117","stroke-opacity":.2,"stroke-width":.5});
+    svg.appendChild(fill);
+    fill.animate([{width:0},{width:w*probs[k]}],{duration:INSTANT?0:600,fill:"forwards",delay:INSTANT?0:i*80});
+    fill.setAttribute("width",w*probs[k]);
+    const nm=el("text",{x:x+4,y:yy+11,fill:"#e6edf3","font-size":10,"font-weight":600,
+      "paint-order":"stroke",stroke:"#0e1117","stroke-width":2.2,"stroke-linejoin":"round"});
+    nm.textContent=k.replace("IDH_","").replace("_"," ");svg.appendChild(nm);
+    if(S.raw){const pc=el("text",{x:x+w-4,y:yy+11,fill:"#e6edf3","font-size":10,
+      "text-anchor":"end","font-variant-numeric":"tabular-nums",
+      "paint-order":"stroke",stroke:"#0e1117","stroke-width":2.2,"stroke-linejoin":"round"});
+      pc.textContent=probs[k].toFixed(2);svg.appendChild(pc);}
+  });
+  return y+keys.length*(bh+gap);
+}
+
+function tileRect(sel,color,cls=""){
+  const cw=L.thumb.s/S.gridC, ch=L.thumb.s/S.gridR;
+  return el("rect",{x:L.thumb.x+sel.col*cw,y:L.thumb.y+sel.row*ch,
+    width:cw,height:ch,fill:"none",stroke:color,"stroke-width":3,rx:3,class:cls});
+}
+
+// ---- full animation ----
+let ANIM_RUN=0;   // guards against overlapping animateFrom calls (e.g. a
+                  // stale Replay click racing a just-finished pipeline run)
+                  // corrupting each other's SVG mid-draw, since each call
+                  // starts with svg.innerHTML="" - without this, two
+                  // concurrent calls interleave their drawing into the same
+                  // SVG, which can show elements (and labels) from two
+                  // different `run` objects at once.
+async function animateFrom(run){
+  ANIM_RUN++;const _tok=ANIM_RUN;
+  const svg=$("stage");svg.innerHTML="";
+  // 1. thumbnail
+  svg.appendChild(el("image",{href:S.thumb,x:L.thumb.x,y:L.thumb.y,
+    width:L.thumb.s,height:L.thumb.s}));
+  label(svg,L.thumb.x,L.thumb.y-12,`Thumbnail · ${S.thumbW}×${S.thumbH} px · 4.0 µm/px`);
+  if(_tok!==ANIM_RUN)return;
+  // 2. grade prediction card
+  const gclass=run.A.grade_pred;
+  if(S.pred){
+    const gx=L.thumb.x, gy=L.thumb.y+L.thumb.s+22;
+    const g=el("g");g.setAttribute("opacity",INSTANT?"1":"0");svg.appendChild(g);
+    g.appendChild(el("rect",{x:gx,y:gy,width:200,height:26,rx:13,fill:COL[gclass]||"#64748b",
+      stroke:"#0e1117",'stroke-opacity':.15,'stroke-width':1}));
+    const t=el("text",{x:gx+100,y:gy+17,fill:INK[gclass]||"#fff","font-size":12,"font-weight":700,
+      "text-anchor":"middle"});t.textContent="Stage A: "+gclass.replace("_"," ");
+    g.appendChild(t);
+    if(S.raw){const c=el("text",{x:gx+210,y:gy+17,fill:"#8b949e","font-size":11});
+      c.textContent="conf "+run.A.confidence.toFixed(2);g.appendChild(c);}
+    if(!INSTANT)g.animate([{opacity:0},{opacity:1}],{duration:400,fill:"forwards"});
+  }
+  await sleep(400);
+  if(_tok!==ANIM_RUN)return;
+  // 3. signal map overlay (heat cells) + highlight selected
+  if(S.signal){
+    const cw=L.thumb.s/S.gridC, ch=L.thumb.s/S.gridR;
+    for(let r=0;r<S.gridR;r++)for(let c=0;c<S.gridC;c++){
+      const v=run.R.risk_grid[r][c];
+      const rect=el("rect",{x:L.thumb.x+c*cw,y:L.thumb.y+r*ch,width:cw,height:ch,
+        fill:heat(v)});
+      svg.appendChild(rect);
+      fadeIn(rect,0.45,{duration:500,delay:INSTANT?0:(r*S.gridC+c)*4});
+    }
+    label(svg,L.thumb.x,L.thumb.y+L.thumb.s+ (S.pred?70:22),
+      `Stage A signal map · patch-injection · ${ARCH_LABEL[S.archA]}`);
+    await sleep(700);
+  }
+  if(_tok!==ANIM_RUN)return;
+  // 4. highlight selected tiles, sequential
+  for(const sel of run.selected||run.R.selected){
+    const rr=tileRect(sel,"#e11d1d");svg.appendChild(rr);
+    fadeIn(rr,1,{duration:250});
+    if(!INSTANT)await sleep(120);
+  }
+  await sleep(200);
+  if(_tok!==ANIM_RUN)return;
+  // 5. per-patch: line from tile -> high-res patch -> into Stage B
+  const lay=patchLayout(run.patches.length);
+  run.patches.forEach((p,i)=>{
+    const pos=lay.positions[i];
+    p._px=pos.x; p._py=pos.y; p._ps=pos.s;
+  });
+  label(svg,L.patchArea.x,L.patchArea.y-14,
+    `High-resolution patches (level-0 region → resampled to 2048²), n=${run.patches.length}`);
+  // Central WSI overview: a rectangle at the true level-0 aspect ratio, placed
+  // between thumbnail and patches. Red connectors run thumbnail tile → its
+  // location on the WSI; blue connectors run each WSI location → its resampled
+  // high-res patch. This makes the coordinate transform explicit.
+  const wsi=S.wsiDim||run.R.wsi_level0_dim||(run.patches[0]&&run.patches[0].wsi_level0_dim);
+  let mini=null;
+  if(wsi&&run.patches.length){
+    const aspect=wsi[1]/wsi[0];
+    const mw=L.wsiMap.w, mh=Math.round(mw*aspect);
+    const mx=L.wsiMap.x, my=L.wsiMap.y+Math.max(0,(L.thumb.s-mh)/2);
+    mini={x:mx,y:my,w:mw,h:mh,W:wsi[0],H:wsi[1]};
+    const mg=el("g");mg.setAttribute("opacity",INSTANT?"1":"0");svg.appendChild(mg);
+    mg.appendChild(el("rect",{x:mx,y:my,width:mw,height:mh,rx:4,fill:"#0b0e13",
+      stroke:"#2a323d","stroke-width":1.5}));
+    // Draw the thumbnail's TISSUE region (padding cropped) filling the mini-map,
+    // so it aligns with the WSI level-0 coordinates the red boxes use. Without
+    // this the square padded thumbnail is stretched and the boxes miss.
+    const tit=S.tissueInThumb;
+    if(tit&&tit.w>0){
+      const clipId="wsiclip";
+      let defs=svg.querySelector("defs");
+      if(!defs){defs=el("defs");svg.appendChild(defs);}
+      const cp=el("clipPath",{id:clipId});
+      cp.appendChild(el("rect",{x:mx,y:my,width:mw,height:mh,rx:4}));
+      defs.appendChild(cp);
+      // scale factor from tissue-thumbnail-pixels to mini-map pixels
+      const sx=mw/tit.w, sy=mh/tit.h;
+      // place the full thumbnail so its tissue sub-rect lands on [mx,my,mw,mh]
+      const iw=tit.thumb*sx, ih=tit.thumb*sy;
+      const ix=mx - tit.x*sx, iy=my - tit.y*sy;
+      const timg=el("image",{href:S.thumb,x:ix,y:iy,width:iw,height:ih,opacity:.4});
+      timg.setAttribute("clip-path",`url(#${clipId})`);
+      mg.appendChild(timg);
+    }
+    const ml=el("text",{x:mx+mw/2,y:my-8,fill:"#8b949e","font-size":9,"text-anchor":"middle"});
+    ml.textContent="WSI level 0";mg.appendChild(ml);
+    const ml2=el("text",{x:mx+mw/2,y:my+mh+13,fill:"#6b7686","font-size":8,"text-anchor":"middle"});
+    ml2.textContent=`${wsi[0]}×${wsi[1]} px`;mg.appendChild(ml2);
+    if(!INSTANT)mg.animate([{opacity:0},{opacity:1}],{duration:300,fill:"forwards"});
+    if(!INSTANT)await sleep(200);
+  }
+  const cw=L.thumb.s/S.gridC, ch=L.thumb.s/S.gridR;
+  for(let i=0;i<run.patches.length;i++){
+    const p=run.patches[i];const ps=p._ps;
+    const tkey=p.row+"_"+p.col;
+    const isAdded=S._fadeInKeys&&S._fadeInKeys.has(tkey);
+    const from={x:L.thumb.x+p.col*cw+cw/2,y:L.thumb.y+p.row*ch+ch/2};
+    // red block on WSI map + red connector thumbnail→WSI
+    let wsiCentre=null;
+    if(mini&&p.wsi_bbox){
+      const [wx,wy,ww,wh]=p.wsi_bbox;
+      const rx=mini.x+wx/mini.W*mini.w, ry=mini.y+wy/mini.H*mini.h;
+      const rw=Math.max(3,ww/mini.W*mini.w), rh=Math.max(3,wh/mini.H*mini.h);
+      wsiCentre={x:rx+rw/2,y:ry+rh/2, right:rx+rw};
+      const box=el("rect",{x:rx,y:ry,width:rw,height:rh,fill:"#e11d1d",
+        "fill-opacity":.35,stroke:"#e11d1d","stroke-width":1.5,"data-tile":tkey});
+      svg.appendChild(box);
+      if(isAdded){box.setAttribute("opacity","0");box.animate([{opacity:0},{opacity:1}],{duration:400,delay:200,fill:"forwards"});}
+      else fadeIn(box,1,{duration:250});
+      const rconn=el("path",{d:`M${from.x},${from.y} C${from.x+80},${from.y} ${wsiCentre.x-70},${wsiCentre.y} ${wsiCentre.x},${wsiCentre.y}`,
+        fill:"none",stroke:"#e11d1d","stroke-width":1.3,"stroke-dasharray":"4 3","data-tile":tkey});
+      svg.appendChild(rconn);
+      if(isAdded){rconn.setAttribute("opacity","0");rconn.animate([{opacity:0},{opacity:.3}],{duration:400,delay:200,fill:"forwards"});}
+      else if(INSTANT)rconn.setAttribute("opacity",".3");
+      else{rconn.animate([{opacity:0},{opacity:.8}],{duration:300,fill:"forwards"});
+        rconn.animate([{opacity:.8},{opacity:.3}],{duration:600,delay:400,fill:"forwards"});}
+      if(!INSTANT)await sleep(run.patches.length>6?70:180);
+    }
+    const to={x:p._px,y:p._py+ps/2};
+    // blue connector: starts from this tile's WSI block (right edge) and flows
+    // to its resampled high-res patch. Red = thumbnail→WSI, blue = WSI→patch.
+    const src=wsiCentre?{x:wsiCentre.right,y:wsiCentre.y}:{x:mini?mini.x+mini.w:from.x,y:from.y};
+    const d=`M${src.x},${src.y} C${src.x+70},${src.y} ${to.x-70},${to.y} ${to.x},${to.y}`;
+    const path=el("path",{d,fill:"none",stroke:"#3b82f6","stroke-width":1.5,opacity:.75,"data-tile":tkey});
+    svg.appendChild(path);
+    const len=path.getTotalLength();
+    path.style.strokeDasharray=len;
+    if(isAdded){path.style.strokeDashoffset=0;path.setAttribute("opacity","0");
+      path.animate([{opacity:0},{opacity:.3}],{duration:400,delay:300,fill:"forwards"});}
+    else if(INSTANT){path.style.strokeDashoffset=0;path.setAttribute("opacity",".3");}
+    else{path.style.strokeDashoffset=len;
+      path.animate([{strokeDashoffset:len},{strokeDashoffset:0}],{duration:500,fill:"forwards"});
+      path.animate([{opacity:.75},{opacity:.3}],{duration:700,delay:500,fill:"forwards"});}
+    if(!INSTANT)await sleep(run.patches.length>6?100:280);
+    // high-res patch appears
+    const g=el("g");g.setAttribute("data-tile",tkey);g.style.cursor="pointer";svg.appendChild(g);
+    g.setAttribute("opacity",(INSTANT&&!isAdded)?"1":"0");
+    g.appendChild(el("image",{href:p.patch,x:p._px,y:p._py,width:ps,height:ps,rx:5}));
+    g.appendChild(el("rect",{x:p._px,y:p._py,width:ps,height:ps,rx:5,fill:"none",
+      stroke:"#3b82f6","stroke-width":1.6}));
+    // click to inspect this patch in a full overlay
+    g.addEventListener("click",()=>{
+      const occNow=S.lastRun&&S.lastRun.occl?S.lastRun.occl[p.row+"_"+p.col]:null;
+      openInspect(p,(S.lastRun&&S.lastRun.B)||run.B,occNow);
+    });
+    if(isAdded)g.animate([{opacity:0},{opacity:1}],{duration:450,delay:350,fill:"forwards"});
+    else if(!INSTANT)g.animate([{opacity:0},{opacity:1}],{duration:350,fill:"forwards"});
+    if(!INSTANT)await sleep(run.patches.length>6?80:220);
+    // occlusion overlay if on
+    if(S.occl&&run.occl[p.row+"_"+p.col]){
+      const occ=run.occl[p.row+"_"+p.col];
+      const og=occ.grid?occ.grid[0]:8;      // occlusion grid from backend
+      const cellp=ps/og;
+      const revealOcc=isAdded||S._occlRevealOnly;
+      for(let r=0;r<og;r++)for(let c=0;c<og;c++){
+        const v=occ.importance_grid[r][c];
+        const rect=el("rect",{x:p._px+c*cellp,y:p._py+r*cellp,width:cellp,height:cellp,
+          fill:heat(v),opacity:(INSTANT&&!revealOcc)?0.5:0});g.appendChild(rect);
+        if(revealOcc)rect.animate([{opacity:0},{opacity:.5}],{duration:350,delay:(isAdded?400:0)+(r*og+c)*2,fill:"forwards"});
+        else if(!INSTANT)rect.animate([{opacity:0},{opacity:.5}],{duration:300,fill:"forwards",delay:(r*og+c)*2});
+      }
+      // outline the top-1 occlusion cell and show the level-0 cellular zoom inset
+      if(occ.top_cell){
+        const [tr,tc]=occ.top_cell;
+        g.appendChild(el("rect",{x:p._px+tc*cellp,y:p._py+tr*cellp,width:cellp,height:cellp,
+          fill:"none",stroke:"#fde047","stroke-width":2}));
+        if(occ.top_zoom){
+          const zs=ps*0.42;                     // zoom inset size
+          const zx=p._px+ps-zs-3, zy=p._py+ps-zs-3;  // bottom-right corner
+          // connector from the top cell to the inset
+          const cx=p._px+tc*cellp+cellp/2, cy=p._py+tr*cellp+cellp/2;
+          g.appendChild(el("path",{d:`M${cx},${cy} L${zx+zs/2},${zy+zs/2}`,
+            stroke:"#fde047","stroke-width":1,"stroke-dasharray":"3 3",opacity:.8,fill:"none"}));
+          g.appendChild(el("image",{href:occ.top_zoom,x:zx,y:zy,width:zs,height:zs}));
+          g.appendChild(el("rect",{x:zx,y:zy,width:zs,height:zs,fill:"none",
+            stroke:"#fde047","stroke-width":2}));
+          if(S.raw){const zl=el("text",{x:zx+2,y:zy-3,fill:"#fde047","font-size":8,
+            "font-weight":600});zl.textContent=`top1 r${tr}c${tc} · lvl0 zoom`;g.appendChild(zl);}
+        }
+      }
+    }
+  }
+  await sleep(300);
+  if(_tok!==ANIM_RUN)return;
+  // 6. Stage B box + flow lines from patches into it
+  const sb=L.stageB;
+  const box=el("g");box.setAttribute("opacity",INSTANT?"1":"0");svg.appendChild(box);
+  box.appendChild(el("rect",{x:sb.x,y:sb.y,width:sb.w,height:sb.h,rx:10,
+    fill:"#1c232d",stroke:"#6366f1","stroke-width":2}));
+  // centered two-line label, proper ResNet casing (#5)
+  const bt1=el("text",{x:sb.x+sb.w/2,y:sb.y+sb.h/2-4,fill:"#e6edf3","font-size":14,
+    "font-weight":700,"text-anchor":"middle","dominant-baseline":"middle"});
+  bt1.textContent="Stage B";box.appendChild(bt1);
+  const bt2=el("text",{x:sb.x+sb.w/2,y:sb.y+sb.h/2+15,fill:"#8b949e","font-size":12,
+    "text-anchor":"middle","dominant-baseline":"middle"});
+  bt2.textContent=ARCH_LABEL[S.archB];box.appendChild(bt2);
+  // how many tiles fed Stage B, percentile-only (all tiles above threshold)
+  const nsel=run.R.n_selected!=null?run.R.n_selected:run.patches.length;
+  const ncell=(run.R.grid_rows||8)*(run.R.grid_cols||8);
+  const cnt=el("text",{x:sb.x+sb.w/2,y:sb.y+sb.h+16,fill:"#8b949e","font-size":10,
+    "text-anchor":"middle"});
+  cnt.textContent=`${nsel} tile${nsel===1?"":"s"} (p${run.R.percentile} of ${ncell}) → soft vote`;
+  box.appendChild(cnt);
+  if(+run.R.percentile!==95){
+    const dn=el("text",{x:sb.x+sb.w/2,y:sb.y+sb.h+28,fill:"#6b7686","font-size":8.5,
+      "text-anchor":"middle"});
+    dn.textContent="deployed pipeline uses p95";box.appendChild(dn);
+  }
+  if(!INSTANT)box.animate([{opacity:0},{opacity:1}],{duration:400,fill:"forwards"});
+  for(const p of run.patches){
+    const from={x:p._px+p._ps,y:p._py+p._ps/2};
+    const to={x:sb.x,y:sb.y+sb.h/2};
+    const path=el("path",{d:`M${from.x},${from.y} C${from.x+60},${from.y} ${to.x-60},${to.y} ${to.x},${to.y}`,
+      fill:"none",stroke:"#6366f1","stroke-width":1.6,opacity:.6});
+    svg.appendChild(path);
+    const len=path.getTotalLength();path.style.strokeDasharray=len;
+    if(INSTANT)path.style.strokeDashoffset=0;
+    else{path.style.strokeDashoffset=len;
+      path.animate([{strokeDashoffset:len},{strokeDashoffset:0}],{duration:450,fill:"forwards"});}
+  }
+  if(!INSTANT)await sleep(500);
+  if(_tok!==ANIM_RUN)return;
+  // 7. Stage B prediction bars + subtype pill
+  if(S.pred){
+    const by=sb.y+sb.h+34;
+    label(svg,sb.x,by-4,"Molecular prediction");
+    probBars(svg,sb.x,by+6,run.B.slide_probs,COL,sb.w);
+    const sub=run.B.subtype_pred;
+    const py=by+6+3*18+8;
+    svg.appendChild(el("rect",{x:sb.x,y:py,width:sb.w,height:26,rx:13,fill:COL[sub],
+      stroke:"#0e1117",'stroke-opacity':.15,'stroke-width':1}));
+    const pt=el("text",{x:sb.x+sb.w/2,y:py+17,fill:INK[sub]||"#fff","font-size":12,"font-weight":700,
+      "text-anchor":"middle"});pt.textContent=sub.replace("IDH_","IDH-").replace("_"," ");
+    svg.appendChild(pt);
+    if(S.raw){const c=el("text",{x:sb.x,y:py+44,fill:"#8b949e","font-size":11});
+      c.textContent="confidence "+run.B.confidence.toFixed(2);svg.appendChild(c);}
+  }
+  await sleep(400);
+  if(_tok!==ANIM_RUN)return;
+  // 8. integrated diagnosis
+  $("dxText").textContent=run.I.integrated_diagnosis;
+  $("dxText").animate([{opacity:0,transform:"translateY(8px)"},{opacity:1,transform:"translateY(0)"}],
+    {duration:500,fill:"forwards"});
+  $("dxConf").textContent=S.raw?("integrated confidence "+run.I.integrated_confidence.toFixed(2)):"";
+  // provenance: the settings that produced this result
+  const pv=run.R.percentile!=null?run.R.percentile:(+$("pct").value);
+  $("dxProv").textContent=`Stage A ${ARCH_LABEL[S.archA]} · Stage B ${ARCH_LABEL[S.archB]} · p${pv} · ${run.patches.length} tile${run.patches.length===1?"":"s"}`;
+}
+
+// display-only toggles: re-render the last run instantly (INSTANT skips the
+// timed sleeps, so the pipeline redraws in one frame with the new options).
+function renderStatic(){
+  if(!S.lastRun)return Promise.resolve();
+  INSTANT=true;
+  return animateFrom(S.lastRun).finally(()=>{INSTANT=false;});
+}
+
+function heat(v){ // 0..1 -> blue->yellow->red (RdYlBu_r-ish)
+  v=Math.max(0,Math.min(1,v));
+  const stops=[[59,76,192],[144,178,214],[247,247,247],[244,165,130],[178,24,43]];
+  const t=v*(stops.length-1);const i=Math.floor(t);const f=t-i;
+  const a=stops[i],b=stops[Math.min(i+1,stops.length-1)];
+  const c=a.map((x,k)=>Math.round(x+(b[k]-x)*f));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
+// ---- click-to-inspect overlay ----
+function htmlBars(container,probs,colors){
+  container.innerHTML="";
+  Object.keys(probs).forEach(k=>{
+    const row=document.createElement("div");row.className="bar";
+    const nm=document.createElement("div");nm.className="name";
+    nm.textContent=k.replace("IDH_","").replace("_"," ");
+    const track=document.createElement("div");track.className="track";
+    const fill=document.createElement("div");fill.className="fill";
+    fill.style.background=colors[k]||"#3b82f6";fill.style.width="0%";
+    const pct=document.createElement("div");pct.className="pct";pct.textContent=probs[k].toFixed(2);
+    track.appendChild(fill);row.append(nm,track,pct);container.appendChild(row);
+    requestAnimationFrame(()=>{fill.style.width=(probs[k]*100)+"%";});
+  });
+}
+function openInspect(p,B,occ){
+  const D=380;
+  $("inspImg").setAttribute("href",p.patch);
+  const og=$("inspOccl");og.innerHTML="";
+  $("inspTitle").textContent=`Patch r${p.row}c${p.col}`;
+  // per-patch probs if available, else slide-level
+  const pp=(B.per_patch||[]).find(x=>x.row===p.row&&x.col===p.col);
+  const probs=pp?pp.probs:B.slide_probs;
+  const call=pp?pp.pred:B.subtype_pred;
+  const conf=pp?pp.confidence:B.confidence;
+  $("inspMeta").innerHTML=
+    `<div><span class="k">Risk R:</span> ${p.risk!=null?p.risk.toFixed(2):"—"}</div>`+
+    `<div><span class="k">Tissue:</span> ${p.tissue!=null?p.tissue.toFixed(2):"—"}</div>`+
+    (p.wsi_bbox?`<div><span class="k">Level-0 region:</span> ${p.wsi_bbox[2]}×${p.wsi_bbox[3]} px</div>`:"")+
+    `<div><span class="k">Stage B call:</span> <b>${call.replace("IDH_","IDH-").replace("_"," ")}</b> · conf ${conf.toFixed(2)}</div>`;
+  htmlBars($("inspBars"),probs,COL);
+  // occlusion overlay: shown only when the toggle is on AND data exists,
+  // mirroring exactly what the small patch shows.
+  const showOcc=S.occl&&occ&&occ.importance_grid;
+  if(showOcc){
+    const grid=occ.grid?occ.grid[0]:8;const cell=D/grid;
+    for(let r=0;r<grid;r++)for(let c=0;c<grid;c++){
+      og.appendChild(el("rect",{x:c*cell,y:r*cell,width:cell,height:cell,
+        fill:heat(occ.importance_grid[r][c]),opacity:.5}));
+    }
+    if(occ.top_cell){
+      const [tr,tc]=occ.top_cell;
+      og.appendChild(el("rect",{x:tc*cell,y:tr*cell,width:cell,height:cell,
+        fill:"none",stroke:"#fde047","stroke-width":3}));
+    }
+  }
+  // level-0 zoom inset: show when occlusion is on and a zoom exists
+  if(showOcc&&occ.top_zoom){
+    $("inspZoomWrap").classList.remove("hidden");
+    $("inspZoom").src=occ.top_zoom;
+  }else{$("inspZoomWrap").classList.add("hidden");}
+  $("inspect").classList.remove("hidden");
+}
+function closeInspect(){$("inspect").classList.add("hidden");}
+document.addEventListener("keydown",e=>{if(e.key==="Escape")closeInspect();});
+
+// ---- batch processing ----
+let batchCfg={input:null,output:null,recursive:false};
+$("tRecursive").onclick=()=>{batchCfg.recursive=!batchCfg.recursive;
+  $("tRecursive").classList.toggle("on",batchCfg.recursive);};
+$("tSavePatches").onclick=()=>{S.savePatches=!S.savePatches;
+  $("tSavePatches").classList.toggle("on",S.savePatches);};
+$("btnBatchIn").onclick=async()=>{
+  $("batchInStatus").innerHTML='<span class="spinner"></span>choosing…';
+  try{const b=await API("browse_folder",{});
+    if(b.folder){batchCfg.input=b.folder;
+      $("batchInStatus").innerHTML=`✓ ${b.folder.split(/[\\/]/).pop()}`;}
+    else $("batchInStatus").textContent="cancelled";
+  }catch(e){const f=prompt("Input folder with WSIs:");if(f){batchCfg.input=f;$("batchInStatus").textContent="✓ set";}}
+  updateBatchRun();
+};
+$("btnBatchOut").onclick=async()=>{
+  $("batchOutStatus").innerHTML='<span class="spinner"></span>choosing…';
+  try{const b=await API("browse_output",{});
+    if(b.folder){batchCfg.output=b.folder;
+      $("batchOutStatus").innerHTML=`✓ a folder <b>GS_batchrun_{id}</b> will be created in ${b.folder.split(/[\\/]/).pop()}`;}
+    else $("batchOutStatus").textContent="cancelled";
+  }catch(e){const f=prompt("Output location:");if(f){batchCfg.output=f;$("batchOutStatus").textContent="✓ set";}}
+  updateBatchRun();
+};
+function updateBatchRun(){$("btnBatchRun").disabled=!(batchCfg.input&&batchCfg.output);}
+
+let batchGrid={cursor:0,cards:new Map(),runId:null};
+
+function resetBatchGrid(){
+  batchGrid={cursor:0,cards:new Map(),runId:null};
+  $("batchLive").innerHTML="";
+}
+let lastOverview=null;   // {type:'grid'} or {type:'table',index,runDir} - whichever
+                          // overview screen was actually showing before a slide
+                          // was opened, so Back always returns to the right place
+function showBatchLive(){
+  lastOverview={type:"grid"};
+  $("stage").classList.add("hidden");
+  $("batchLive").classList.remove("hidden");
+}
+function hideBatchLive(){
+  $("batchLive").classList.add("hidden");
+  $("stage").classList.remove("hidden");
+}
+function applyBatchUpdate(u){
+  let card=batchGrid.cards.get(u.i);
+  if(!card){
+    card=document.createElement("div");card.className="batch-card";
+    card.innerHTML=`<img class="bc-thumb"><img class="bc-overlay">
+      <div class="bc-bottom"><div class="bc-dx"></div><div class="bc-id"></div></div>
+      <div class="bc-dot"></div>`;
+    batchGrid.cards.set(u.i,card);
+    // insert in index order (updates arrive in order, so append is correct)
+    $("batchLive").appendChild(card);
+  }
+  if(u.field==="thumb"){
+    card.querySelector(".bc-thumb").src=u.value;
+    card.querySelector(".bc-id").textContent=u.slide_id||"";
+  }else if(u.field==="overlay"){
+    const ov=card.querySelector(".bc-overlay");
+    ov.src=u.value;
+    requestAnimationFrame(()=>{ov.style.opacity=1;});
+  }else if(u.field==="status"){
+    const dot=card.querySelector(".bc-dot");
+    if(u.value==="done"){
+      dot.style.background="var(--ok)";
+      card.classList.add("bc-done");
+      card.dataset.folder=u.folder||"";
+      card.title=u.diagnosis||"";
+      card.onclick=()=>{if(card.dataset.folder)loadFolder(card.dataset.folder,true);};
+      const dx=card.querySelector(".bc-dx");
+      dx.textContent=shortDx(u.diagnosis);
+      dx.style.color=dxColor(u.diagnosis);
+      requestAnimationFrame(()=>{dx.style.opacity=1;});
+    }else if(u.value==="error"){
+      dot.style.background="var(--bad)";
+      card.title="error: "+(u.error||"");
+    }
+  }
+}
+
+// abbreviate the integrated diagnosis for the small batch cards, and colour it
+// to match the app's molecular palette so it reads at a glance.
+function shortDx(dx){
+  if(!dx) return "";
+  if(/glioblastoma/i.test(dx)) return "GBM";
+  if(/oligodendroglioma/i.test(dx)){
+    return /grade\s*2/i.test(dx) ? "Oligo G2" : /grade\s*3/i.test(dx) ? "Oligo G3" : "Oligo";
+  }
+  if(/astrocytoma/i.test(dx)){
+    return /grade\s*2/i.test(dx) ? "Astro G2" : /3-4|grade\s*3/i.test(dx) ? "Astro G3-4" : "Astro";
+  }
+  if(/control/i.test(dx)) return "Control";
+  if(/unresolved/i.test(dx)) return "Unresolved";
+  return dx.length>16 ? dx.slice(0,15)+"…" : dx;
+}
+function dxColor(dx){
+  if(!dx) return "#e6edf3";
+  if(/glioblastoma/i.test(dx)) return COL.IDH_wt;
+  if(/oligodendroglioma/i.test(dx)) return COL.IDH_mt_1p19q;
+  if(/astrocytoma/i.test(dx)) return COL.IDH_mt;
+  if(/control/i.test(dx)) return COL.control;
+  return "#e6edf3";
+}
+
+$("btnBatchRun").onclick=async()=>{
+  if(!batchCfg.input||!batchCfg.output)return;
+  $("btnBatchRun").disabled=true;
+  $("batchStatus").textContent="";
+  $("batchProg").classList.remove("hidden");
+  $("batchBar").style.width="0%";
+  $("batchProgTxt").textContent="starting…";
+  resetBatchGrid();
+  showBatchLive();
+  try{
+    const start=await API("batch",{input_folder:batchCfg.input,output_location:batchCfg.output,
+      archA:S.archA,archB:S.archB,percentile:+$("pct").value,occlusion:S.occl,
+      recursive:batchCfg.recursive,save_patches:S.savePatches});
+    const runId=start.run_id, total=start.total;
+    batchGrid.runId=runId;
+    // poll for incremental updates only (cheap even over hundreds of slides:
+    // finished/unchanged slides are never re-sent)
+    const poll=async()=>{
+      const p=await API("batch_progress",{run_id:runId,cursor:batchGrid.cursor});
+      for(const u of p.updates) applyBatchUpdate(u);
+      batchGrid.cursor=p.next_cursor;
+      const pct=total?Math.round(p.done/total*100):0;
+      $("batchBar").style.width=pct+"%";
+      const cur=p.current?` · processing ${p.current}`:"";
+      $("batchProgTxt").textContent=`${p.done}/${total} slides (${pct}%)`+
+        (p.errors?` · ${p.errors} error${p.errors>1?"s":""}`:"")+cur;
+      if(p.finished){
+        $("batchProgTxt").textContent=`done · ${p.ok}/${total} ok`+
+          (p.errors?` · ${p.errors} errors`:"");
+        $("batchStatus").innerHTML=`✓ ${p.run_dir.split(/[\\/]/).pop()} · `+
+          `<a href="#" id="viewBatchTable" style="color:var(--accent)">view table</a>`;
+        $("viewBatchTable").onclick=(e)=>{e.preventDefault();showBatchTable(p.index,p.run_dir);};
+        $("btnBatchRun").disabled=false;
+        return;
+      }
+      setTimeout(poll,700);
+    };
+    poll();
+  }catch(e){$("batchProgTxt").textContent="";$("batchStatus").textContent="✕ "+e.message;
+    $("btnBatchRun").disabled=false;}
+};
+
+$("btnBatchOpen").onclick=async()=>{
+  $("batchOpenStatus").innerHTML='<span class="spinner"></span>choosing…';
+  let folder="";
+  try{const b=await API("browse_folder",{});folder=b.folder;}
+  catch(e){folder=prompt("Path to a GS_batchrun_* folder:")||"";}
+  if(!folder){$("batchOpenStatus").textContent="cancelled";return;}
+  try{const idx=await API("batch_index",{folder});
+    $("batchOpenStatus").textContent="✓ opened";
+    showBatchTable(idx,folder);
+  }catch(e){$("batchOpenStatus").textContent="✕ "+e.message;}
+};
+
+function closeBatchTable(){
+  $("batchPanel").classList.add("hidden");
+  // if the live grid is actually behind the table, correct the tracked
+  // overview back to it so a card click's Back button returns here correctly
+  if(!$("batchLive").classList.contains("hidden")) lastOverview={type:"grid"};
+}
+function showBatchTable(index,runDir){
+  lastOverview={type:"table",index,runDir};
+  $("batchTitle").textContent=`Batch run ${index.run_id}`;
+  $("batchMeta").textContent=`${index.n_slides} slides · models A:${index.archA} B:${index.archB} · p${index.percentile} · ${index.created}`;
+  const wrap=$("batchTable");wrap.innerHTML="";
+  const tbl=document.createElement("table");
+  tbl.style.cssText="width:100%;border-collapse:collapse;font-size:12px";
+  tbl.innerHTML=`<tr style="text-align:left;color:var(--mut)">
+    <th style="padding:6px 8px">#</th><th style="padding:6px 8px">slide</th>
+    <th style="padding:6px 8px">grade</th><th style="padding:6px 8px">subtype</th>
+    <th style="padding:6px 8px">diagnosis</th><th style="padding:6px 8px">conf</th>
+    <th></th></tr>`;
+  index.slides.forEach(e=>{
+    const tr=document.createElement("tr");
+    tr.style.cssText="border-top:1px solid var(--line)";
+    if(e.status!=="ok"){
+      tr.innerHTML=`<td style="padding:6px 8px">${e.index}</td>
+        <td style="padding:6px 8px">${e.slide_id}</td>
+        <td colspan="5" style="padding:6px 8px;color:var(--bad)">error: ${e.error||""}</td>`;
+    }else{
+      tr.innerHTML=`<td style="padding:6px 8px">${e.index}</td>
+        <td style="padding:6px 8px">${e.slide_id}</td>
+        <td style="padding:6px 8px">${(e.grade||"").replace("_"," ")}</td>
+        <td style="padding:6px 8px">${(e.subtype||"").replace("IDH_","IDH-").replace("_"," ")}</td>
+        <td style="padding:6px 8px">${e.diagnosis||""}</td>
+        <td style="padding:6px 8px">${e.confidence!=null?e.confidence:""}</td>
+        <td style="padding:6px 8px"><button class="sec" style="width:auto;margin:0;padding:4px 10px;font-size:11px">▶ View</button></td>`;
+      tr.querySelector("button").onclick=async()=>{
+        $("batchPanel").classList.add("hidden");
+        await loadFolder(e.folder,true);
+      };
+    }
+    tbl.appendChild(tr);
+  });
+  wrap.appendChild(tbl);
+  $("batchPanel").classList.remove("hidden");
+}
+
+// ---- load previous result ----
+$("btnLoad").onclick=async()=>{
+  $("loadStatus").innerHTML='<span class="spinner"></span>choosing folder…';
+  let folder="";
+  try{const b=await API("browse_folder",{});folder=b.folder;}catch(e){
+    folder=prompt("Path to a GS_ analysis folder:")||"";}
+  if(!folder){$("loadStatus").textContent="cancelled";return;}
+  await loadFolder(folder);
+};
+
+$("btnBackToBatch").onclick=()=>{
+  $("btnBackToBatch").classList.add("hidden");
+  if(!lastOverview)return;
+  if(lastOverview.type==="grid")showBatchLive();
+  else if(lastOverview.type==="table")showBatchTable(lastOverview.index,lastOverview.runDir);
+};
+
+async function loadFolder(folder,fromBatch=false){
+  hideBatchLive();
+  $("btnBackToBatch").classList.toggle("hidden",!fromBatch);
+  $("loadStatus").innerHTML='<span class="spinner"></span>loading…';
+  try{
+    const d=await API("load",{folder});
+    S.thumb=d.thumbnail;S.thumbW=d.thumbnail_w;S.thumbH=d.thumbnail_h;
+    S.wsiDim=d.wsi_level0_dim;S.gridR=d.grid[0];S.gridC=d.grid[1];
+    S.tissueInThumb=d.tissue_in_thumb||null;
+    S.session=null;                      // loaded, not a live session
+    const run={
+      A:{grade_pred:d.stage_a?.grade_pred||"",confidence:d.stage_a?.confidence||0},
+      R:{risk_grid:d.risk_grid,selected:d.selected,percentile:d.percentile||95,
+         grid_rows:d.grid[0],grid_cols:d.grid[1],n_selected:d.patches.length,
+         wsi_level0_dim:d.wsi_level0_dim},
+      patches:d.patches.map(p=>({row:p.row,col:p.col,risk:p.risk,tissue:p.tissue,
+        wsi_bbox:p.wsi_bbox,patch:p.patch})),
+      B:{slide_probs:{IDH_mt:d.stage_b?.prob_IDH_mt||0,
+         IDH_mt_1p19q:d.stage_b?.prob_IDH_mt_1p19q||0,IDH_wt:d.stage_b?.prob_IDH_wt||0},
+         subtype_pred:d.stage_b?.subtype_pred||"",confidence:d.stage_b?.confidence||0,
+         per_patch:[]},
+      occl:{},
+      I:{integrated_diagnosis:d.integrated?.diagnosis||"unknown",
+         integrated_confidence:d.integrated?.confidence||0},
+    };
+    // reconstruct occlusion overlays from the saved grids, if present
+    for(const p of d.patches){
+      if(p.occl_grid){
+        run.occl[p.row+"_"+p.col]={
+          importance_grid:p.occl_grid,
+          grid:[p.occl_grid.length,p.occl_grid[0].length],
+          top_cell:p.occl_top?p.occl_top.cell:null,
+          top_zoom:p.top_zoom||null,
+        };
+      }
+    }
+    // gate the occlusion toggle on whether this result has occlusion data
+    const occlAvail=!!d.occlusion_available;
+    S.occlAvailable=occlAvail;
+    S.occl=false;$("tOccl").classList.remove("on");
+    setOcclToggleEnabled(occlAvail);
+    // reflect the settings that produced this result in the sidebar controls
+    if(d.archA){S.archA=d.archA;[...$("segA").children].forEach(b=>b.classList.toggle("on",b.dataset.a===d.archA));}
+    if(d.archB){S.archB=d.archB;[...$("segB").children].forEach(b=>b.classList.toggle("on",b.dataset.b===d.archB));}
+    if(d.percentile!=null){$("pct").value=d.percentile;$("pctVal").textContent=d.percentile;}
+    S.lastRun=run;S.selected=d.selected;
+    $("btnSave").disabled=true;$("btnReplay").disabled=false;
+    $("loadStatus").innerHTML=`✓ loaded ${d.slide_id}<br>`+
+      `<span style="color:var(--mut)">A:${d.archA?ARCH_LABEL[d.archA]:"?"} · B:${d.archB?ARCH_LABEL[d.archB]:"?"} · p${d.percentile!=null?d.percentile:"?"}`+
+      `${occlAvail?" · occlusion":""}</span>`;
+    await animateFrom(run);
+  }catch(e){$("loadStatus").textContent="✕ "+e.message;}
+}
+
+// ---- save ----
+$("btnSave").onclick=async()=>{
+  $("saveStatus").innerHTML='<span class="spinner"></span>writing report & figures…';
+  try{const r=await API("save",{session_id:S.session});
+    $("saveStatus").innerHTML=`✓ saved ${r.saved.length} files<br>`
+      +`<span style="color:var(--mut)">${r.report.split(/[\\/]/).pop()}</span>`;
+  }catch(e){$("saveStatus").textContent="✕ "+e.message;}
+};
+
+// ============================================================
+// METHODOLOGY WALKTHROUGH  (real precomputed pipeline, cached)
+// Loads /api/methodology once (backend computes + caches to disk; later opens
+// are instant). Shows the real injection, real signal map, real patches, real
+// Stage B probabilities and occlusion. The same step renderers are reused to
+// live-narrate an actual Run full pipeline (see METHOD.renderLive).
+// ============================================================
+const METHOD=(function(){
+  const NS="http://www.w3.org/2000/svg";
+  let STAGE_ID="methodStage";
+  const SV=()=>document.getElementById(STAGE_ID);
+  function E(t,a={}){const e=document.createElementNS(NS,t);
+    for(const k in a)e.setAttribute(k,a[k]);return e;}
+  function clr(){const s=SV();while(s&&s.firstChild)s.removeChild(s.firstChild);}
+  function T(x,y,s,o={}){const e=E("text",{x,y,fill:o.fill||"#e6edf3",
+    "font-size":o.size||15,"text-anchor":o.anchor||"start","font-weight":o.weight||400});
+    e.textContent=s;SV().appendChild(e);return e;}
+  const wait=ms=>new Promise(r=>setTimeout(r,ms));
+  let RUN=0;
+  const RISK=["#4575b4","#74add1","#abd9e9","#e0f3f8","#fee090","#fdae61","#f46d43","#d73027"];
+  const rc=v=>RISK[Math.min(RISK.length-1,Math.max(0,Math.round(v*(RISK.length-1))))];
+  function img(href,x,y,w,h,o={}){const e=E("image",{href,x,y,width:w,height:h});
+    if(o.op!=null)e.setAttribute("opacity",o.op);SV().appendChild(e);return e;}
+  function heat(x0,y0,w,h,grid,vf,alpha,delay){const [gr,gc]=grid,cw=w/gc,ch=h/gr;
+    for(let r=0;r<gr;r++)for(let c=0;c<gc;c++){
+      const e=E("rect",{x:x0+c*cw,y:y0+r*ch,width:cw,height:ch,fill:rc(vf(r,c)),
+        stroke:"#0b0e13","stroke-width":0.4,opacity:(delay!=null?0:(alpha==null?1:alpha))});
+      SV().appendChild(e);
+      if(delay!=null)e.animate([{opacity:0},{opacity:alpha==null?1:alpha}],
+        {duration:240,delay:(r*gc+c)*delay,fill:"forwards"});}
+  }
+
+  let DATA=null, loading=false, err=null;
+  async function load(){
+    if(DATA||loading)return;loading=true;err=null;
+    try{DATA=await API("methodology",{});}catch(e){err=e.message||String(e);}
+    loading=false;
+  }
+
+  // ---- STEP RENDERERS (take the data object; usable for cache OR live) ----
+  const STEPS=[
+  {t:"The example: a real oligodendroglioma slide",
+   n:d=>`The <b>actual pipeline</b> runs on a real IDH-mutant, 1p/19q-codeleted oligodendroglioma (ResNet50/ResNet50, p95, occlusion). Every result matches <b>Run full pipeline</b>. Stage A grades the thumbnail: <b>${(d.stage_a&&d.stage_a.grade_pred||"").replace("_"," ")}</b> (confidence ${(d.stage_a&&d.stage_a.confidence||0).toFixed(2)}).`,
+   f:async(tok,d)=>{
+     T(500,64,"target slide · 4.0 µm/px thumbnail",{anchor:"middle",fill:"#8b949e",size:14});
+     img(d.target_thumb,350,90,340,340);
+     SV().appendChild(E("rect",{x:350,y:90,width:340,height:340,fill:"none",stroke:"#2a323d"}));
+     await wait(250);if(tok!==RUN)return;
+     const g=d.stage_a?d.stage_a.grade_pred:"";
+     const col={control:"#c9cba3",low_grade:"#ffe1a8",high_grade:"#e26d5c"}[g]||"#64748b";
+     const pill=E("g");pill.setAttribute("opacity","0");SV().appendChild(pill);
+     pill.appendChild(E("rect",{x:400,y:450,width:240,height:34,rx:17,fill:col}));
+     const pt=E("text",{x:520,y:472,"text-anchor":"middle","font-size":14,"font-weight":700,
+       fill:g==="high_grade"?"#fff":"#1d2733"});pt.textContent="Stage A: "+g.replace("_"," ");
+     pill.appendChild(pt);pill.animate([{opacity:0},{opacity:1}],{duration:400,fill:"forwards"});
+   }},
+  {t:"Patch-permutation & the permuted control",
+   n:d=>`Stage A is trained on <b>permuted</b> patches, so it judges tissue by content, not position. The control slide's tiles are <b>shuffled</b> (right) into a neutral reference. Because the model was trained this way, injecting a tile into a permuted control is not a strange or out of distribution test, it is exactly the kind of input the model already learned from.`,
+   f:async(tok,d)=>{
+     T(255,64,"control slide",{anchor:"middle",fill:"#8b949e",size:14});
+     img(d.control_orig,90,90,300,300);
+     T(745,64,"permuted control",{anchor:"middle",fill:"#8b949e",size:14});
+     T(500,250,"shuffle →",{anchor:"middle",fill:"#8b949e",size:14});
+     await wait(400);if(tok!==RUN)return;
+     const e=img(d.control_permuted,590,90,300,300,{op:0});
+     e.animate([{opacity:0},{opacity:1}],{duration:600,fill:"forwards"});
+     await wait(200);T(745,405,"neutral reference (layout destroyed)",{anchor:"middle",fill:"#6b7686",size:11});
+   }},
+  {t:"Patch injection: flip a control tile, watch the logit move",
+   n:d=>{const fr=d.injection&&d.injection.frames||[];const last=fr[fr.length-1];
+     return `We literally <b>replace one tile</b> of the permuted control with a target tile and re-run Stage A. Base logit ${d.injection?d.injection.base_logit:"n/a"}, and a high-signal tile pushes it up markedly, with a shift of up to <b>+${last?last.delta:"n/a"}</b>. That shift is the tile's signal score.`;},
+   f:async(tok,d)=>{
+     const inj=d.injection;if(!inj){T(500,300,"(injection data unavailable)",{anchor:"middle",fill:"#8b949e"});return;}
+     T(230,60,"permuted control (one slot flips)",{anchor:"middle",fill:"#8b949e",size:13});
+     const base=img(inj.permuted_img,70,80,300,300);
+     const [gr,gc]=d.grid,cw=300/gc,ch=300/gr;
+     const sr=inj.slot_row,sc=inj.slot_col;
+     const slotBox=E("rect",{x:70+sc*cw,y:80+sr*ch,width:cw,height:ch,fill:"none",
+       stroke:"#e11d1d","stroke-width":3});SV().appendChild(slotBox);
+     // logit gauge
+     T(700,60,"Stage A logit (target class)",{anchor:"middle",fill:"#e6edf3",size:14});
+     SV().appendChild(E("rect",{x:560,y:90,width:300,height:26,rx:5,fill:"#242b35"}));
+     const allLog=[inj.base_logit,...inj.frames.map(f=>f.logit)];
+     const lo=Math.min(...allLog),hi=Math.max(...allLog),rng=(hi-lo)||1;
+     const gx=v=>300*(v-lo)/rng;
+     const baseBar=E("rect",{x:560,y:90,width:gx(inj.base_logit),height:26,rx:5,fill:"#6b7686"});
+     SV().appendChild(baseBar);
+     const bar=E("rect",{x:560,y:90,width:gx(inj.base_logit),height:26,rx:5,fill:"#e26d5c"});
+     SV().appendChild(bar);
+     const lval=T(710,135,`base ${inj.base_logit}`,{anchor:"middle",fill:"#e6edf3",size:13});
+     // thumbnail with the source tiles marked
+     T(700,175,"target tiles being injected",{anchor:"middle",fill:"#8b949e",size:12});
+     img(d.target_thumb,600,190,200,200);
+     await wait(900);if(tok!==RUN)return;
+     for(let i=0;i<inj.frames.length;i++){if(tok!==RUN)return;
+       const fr=inj.frames[i];
+       // mark source tile on the mini thumbnail, pause so it's clear WHICH tile
+       // is about to be injected before anything changes
+       const tb=E("rect",{x:600+fr.col*(200/gc),y:190+fr.row*(200/gr),width:200/gc,height:200/gr,
+         fill:"none",stroke:"#e11d1d","stroke-width":2.5});SV().appendChild(tb);
+       await wait(700);if(tok!==RUN)return;
+       // swap the control image for the injected one
+       base.setAttribute("href",fr.injected_img);
+       // animate logit bar slowly, then hold on the result so it can be read
+       bar.animate([{width:bar.getAttribute("width")},{width:gx(fr.logit)}],{duration:900,fill:"forwards"});
+       bar.setAttribute("width",gx(fr.logit));
+       lval.textContent=`logit ${fr.logit}   (delta ${fr.delta>=0?"+":""}${fr.delta})`;
+       await wait(2200);
+       if(i<inj.frames.length-1){tb.setAttribute("opacity","0.3");}
+     }
+   }},
+  {t:"Every tile scored → Stage A signal map",
+   n:d=>`Repeating the injection for <b>all</b> tiles gives the real <b>signal map</b>: warm cells are the tissue driving the grade, localised with no pixel annotation.`,
+   f:async(tok,d)=>{
+     T(255,60,"target thumbnail",{anchor:"middle",fill:"#8b949e",size:13});
+     img(d.target_thumb,90,80,300,300);
+     T(745,60,"Stage A signal map",{anchor:"middle",fill:"#e6edf3",size:15,weight:600});
+     img(d.target_thumb,595,80,300,300);
+     heat(595,80,300,300,d.grid,(r,c)=>d.risk_grid[r][c],0.5,9);
+     await wait(d.grid[0]*d.grid[1]*9+200);if(tok!==RUN)return;
+     for(let i=0;i<RISK.length;i++)SV().appendChild(E("rect",{x:640+i*20,y:400,width:20,height:12,fill:RISK[i]}));
+     T(640,394,"low",{fill:"#8b949e",size:11});
+     T(640+RISK.length*20,394,"high",{fill:"#8b949e",size:11,anchor:"end"});
+   }},
+  {t:"p95 selection → high-resolution extraction",
+   n:d=>`Tiles above the <b>95th percentile</b> (${d.selected.length} here) are read back from the whole-slide image at <b>full level-0 resolution</b>. These are the real extracted patches.`,
+   f:async(tok,d)=>{
+     T(200,60,"signal map (p95 boxed)",{anchor:"middle",fill:"#e6edf3",size:14});
+     img(d.target_thumb,50,80,300,300);
+     heat(50,80,300,300,d.grid,(r,c)=>d.risk_grid[r][c],0.5,null);
+     const [gr,gc]=d.grid,cw=300/gc,ch=300/gr;
+     await wait(200);if(tok!==RUN)return;
+     const n=Math.min(d.patches.length,4);
+     for(let i=0;i<n;i++){if(tok!==RUN)return;const p=d.patches[i];
+       SV().appendChild(E("rect",{x:50+p.col*cw,y:80+p.row*ch,width:cw,height:ch,fill:"none",
+         stroke:"#e11d1d","stroke-width":3}));
+       const py=90+i*115;const g=E("g");g.setAttribute("opacity","0");SV().appendChild(g);
+       g.appendChild(E("image",{href:p.patch,x:650,y:py,width:96,height:96}));
+       g.appendChild(E("rect",{x:650,y:py,width:96,height:96,fill:"none",stroke:"#3b82f6","stroke-width":1.6}));
+       SV().appendChild(E("path",{d:`M${50+p.col*cw+cw},${80+p.row*ch+ch/2} C 470,${80+p.row*ch} 560,${py+48} 646,${py+48}`,
+         fill:"none",stroke:"#3b82f6","stroke-width":1.4,"stroke-dasharray":"5 4",opacity:.7}));
+       g.animate([{opacity:0},{opacity:1}],{duration:380,fill:"forwards"});await wait(300);}
+     T(698,80,"level-0 patches",{anchor:"middle",fill:"#e6edf3",size:13});
+   }},
+  {t:"Stage B → molecular subtype",
+   n:d=>`Each patch is classified and soft-voted into one call: <b>${(d.stage_b&&d.stage_b.subtype_pred||"").replace("IDH_","IDH-").replace("_"," ")}</b> (confidence ${(d.stage_b&&d.stage_b.confidence||0).toFixed(2)}). Real probabilities below.`,
+   f:async(tok,d)=>{
+     const n=Math.min(d.patches.length,4);
+     for(let i=0;i<n;i++){const py=95+i*92;
+       SV().appendChild(E("image",{href:d.patches[i].patch,x:55,y:py,width:80,height:80}));
+       SV().appendChild(E("rect",{x:55,y:py,width:80,height:80,fill:"none",stroke:"#3b82f6","stroke-width":1.4}));}
+     T(95,88,"patches",{anchor:"middle",fill:"#e6edf3",size:13});
+     SV().appendChild(E("rect",{x:250,y:220,width:150,height:120,rx:10,fill:"#1c232d",stroke:"#6366f1","stroke-width":1.6}));
+     T(325,278,"Stage B",{anchor:"middle",fill:"#fff",size:16,weight:700});
+     T(325,304,"ResNet50 · soft-vote",{anchor:"middle",fill:"#a9b2c0",size:11});
+     let defs=SV().querySelector("defs");if(!defs){defs=E("defs");SV().appendChild(defs);}
+     const mk=E("marker",{id:"mah",markerWidth:8,markerHeight:8,refX:6,refY:3,orient:"auto"});
+     mk.appendChild(E("path",{d:"M0,0 L6,3 L0,6 Z",fill:"#3b82f6"}));defs.appendChild(mk);
+     SV().appendChild(E("path",{d:"M140,280 L243,280",stroke:"#3b82f6","stroke-width":2,"marker-end":"url(#mah)"}));
+     SV().appendChild(E("path",{d:"M405,280 L510,280",stroke:"#6366f1","stroke-width":2}));
+     await wait(400);if(tok!==RUN)return;
+     const sp=d.stage_b||{};
+     // read probs robustly whether from cache (prob_IDH_*) or a live stage_b response
+     const P=k=>{const v=sp["prob_"+k];return (typeof v==="number")?v:0;};
+     const subs=[["IDH-mut (astro)",P("IDH_mt"),"#a8dadc"],
+       ["IDH-mut 1p/19q",P("IDH_mt_1p19q"),"#f1faee"],
+       ["IDH-wildtype",P("IDH_wt"),"#457b9d"]];
+     T(700,140,"molecular probabilities (soft vote)",{anchor:"middle",fill:"#e6edf3",size:14});
+     for(let i=0;i<subs.length;i++){const [nm,p,col]=subs[i];const yy=185+i*68;
+       T(530,yy-8,nm,{fill:"#e6edf3",size:12});
+       SV().appendChild(E("rect",{x:530,y:yy,width:300,height:30,rx:5,fill:"#242b35"}));
+       const bar=E("rect",{x:530,y:yy,width:0,height:30,rx:5,fill:col,stroke:"#c9ced6","stroke-width":.5});
+       SV().appendChild(bar);const pl=T(842,yy+21,p.toFixed(2),{fill:"#e6edf3",size:12});
+       if(tok!==RUN)return;
+       bar.animate([{width:0},{width:300*p}],{duration:700,delay:i*120,fill:"forwards"});
+       bar.setAttribute("width",300*p);}
+   }},
+  {t:"Occlusion map & integrated diagnosis",
+   n:d=>{const dx=(d.integrated&&(d.integrated.diagnosis||d.integrated.integrated_diagnosis))||"unknown";
+     return `Occlusion masks each sub-region of the driving patch (yellow = top cell). Grade + subtype give the WHO-2021 diagnosis: <b>${dx}</b>. Matches Run full pipeline.`;},
+   f:async(tok,d)=>{
+     const p=d.patches.find(x=>x.occl_grid)||d.patches[0];
+     T(190,60,"occlusion signal map",{anchor:"middle",fill:"#e6edf3",size:14});
+     SV().appendChild(E("image",{href:p.patch,x:50,y:80,width:280,height:280}));
+     if(p.occl_grid){const og=p.occl_grid,gr=og.length,gc=og[0].length,cw=280/gc;
+       for(let r=0;r<gr;r++)for(let c=0;c<gc;c++){
+         const e=E("rect",{x:50+c*cw,y:80+r*cw,width:cw,height:cw,fill:rc(og[r][c]),opacity:0});
+         SV().appendChild(e);if(tok!==RUN)return;
+         e.animate([{opacity:0},{opacity:.45}],{duration:260,delay:(r*gc+c)*6,fill:"forwards"});}
+       await wait(gr*gc*6+250);if(tok!==RUN)return;
+       if(p.occl_top){const [tr,tc]=p.occl_top.cell;
+         SV().appendChild(E("rect",{x:50+tc*cw,y:80+tr*cw,width:cw,height:cw,fill:"none",stroke:"#fde047","stroke-width":3}));}
+       if(p.occl_top&&p.occl_top.zoom){T(430,60,"top-cell level-0 zoom",{anchor:"middle",fill:"#8b949e",size:12});
+         const zg=E("g");zg.setAttribute("opacity","0");SV().appendChild(zg);
+         zg.appendChild(E("image",{href:p.occl_top.zoom,x:355,y:80,width:150,height:150}));
+         zg.appendChild(E("rect",{x:355,y:80,width:150,height:150,fill:"none",stroke:"#fde047","stroke-width":2}));
+         zg.animate([{opacity:0},{opacity:1}],{duration:500,fill:"forwards"});}}
+     const card=E("g");card.setAttribute("opacity","0");SV().appendChild(card);
+     card.appendChild(E("rect",{x:540,y:150,width:410,height:150,rx:14,fill:"#132029",stroke:"#457b9d","stroke-width":1.6}));
+     const t1=E("text",{x:745,y:195,fill:"#8fb4c9","font-size":13,"text-anchor":"middle"});
+     t1.textContent="Integrated diagnosis";card.appendChild(t1);
+     const dx=(d.integrated&&(d.integrated.diagnosis||d.integrated.integrated_diagnosis))||"unknown";
+     const t2=E("text",{x:745,y:233,fill:"#fff","font-size":15,"font-weight":700,"text-anchor":"middle"});
+     t2.textContent=dx.length>38?dx.slice(0,37)+"…":dx;card.appendChild(t2);
+     const conf=(d.integrated&&(d.integrated.confidence||d.integrated.integrated_confidence))||0;
+     const t3=E("text",{x:745,y:268,fill:"#e6edf3","font-size":13,"text-anchor":"middle"});
+     t3.textContent="RN50 / RN50 · p95 · confidence "+conf.toFixed(2);card.appendChild(t3);
+     card.animate([{opacity:0},{opacity:1}],{duration:500,fill:"forwards"});
+   }},
+  {t:"Overview: the whole pipeline in one view",
+   n:d=>{const dx=(d.integrated&&(d.integrated.diagnosis||d.integrated.integrated_diagnosis))||"unknown";
+     return `From thumbnail to diagnosis in one glance. Stage A grades the whole slide, the p95 tiles feed Stage B, and the two combine into <b>${dx}</b>. Nothing here is recomputed, it is the same real result shown step by step above.`;},
+   f:async(tok,d)=>{
+     // 1. thumbnail (top-left)
+     T(105,55,"thumbnail",{anchor:"middle",fill:"#8b949e",size:12});
+     img(d.target_thumb,20,65,170,170);
+     SV().appendChild(E("rect",{x:20,y:65,width:170,height:170,fill:"none",stroke:"#2a323d"}));
+     let defs=SV().querySelector("defs");if(!defs){defs=E("defs");SV().appendChild(defs);}
+     const mk=E("marker",{id:"ovah",markerWidth:8,markerHeight:8,refX:6,refY:3,orient:"auto"});
+     mk.appendChild(E("path",{d:"M0,0 L6,3 L0,6 Z",fill:"#3b82f6"}));defs.appendChild(mk);
+     await wait(250);if(tok!==RUN)return;
+     // 2. Stage A grade pill
+     SV().appendChild(E("path",{d:"M195,150 L245,150",stroke:"#3b82f6","stroke-width":2,"marker-end":"url(#ovah)"}));
+     const sa=d.stage_a||{};const g=sa.grade_pred||"";
+     const gcol={control:"#c9cba3",low_grade:"#ffe1a8",high_grade:"#e26d5c"}[g]||"#64748b";
+     T(320,55,"Stage A",{anchor:"middle",fill:"#8b949e",size:12});
+     SV().appendChild(E("rect",{x:260,y:130,width:120,height:40,rx:20,fill:gcol}));
+     T(320,155,g.replace("_"," "),{anchor:"middle",fill:g==="high_grade"?"#fff":"#1d2733",size:12,weight:700});
+     await wait(300);if(tok!==RUN)return;
+     // 3. p95 thumbs (centered on the same row as thumbnail/Stage A, y=150)
+     SV().appendChild(E("path",{d:"M385,150 L440,150",stroke:"#3b82f6","stroke-width":2,"marker-end":"url(#ovah)"}));
+     T(500,55,`p95 patches (${d.selected.length})`,{anchor:"middle",fill:"#8b949e",size:12});
+     const n=Math.min(d.patches.length,4);
+     const pSize=55,pY=150-pSize/2;   // 150 = row center, matching thumb/Stage A
+     for(let i=0;i<n;i++){
+       img(d.patches[i].patch,450+i*65,pY,pSize,pSize);
+       SV().appendChild(E("rect",{x:450+i*65,y:pY,width:pSize,height:pSize,fill:"none",stroke:"#3b82f6","stroke-width":1.2}));}
+     await wait(300);if(tok!==RUN)return;
+     // 4. Stage B probs (compact), same row center (150) as everything else
+     SV().appendChild(E("path",{d:"M710,150 L760,150",stroke:"#6366f1","stroke-width":2,"marker-end":"url(#ovah)"}));
+     T(840,55,"Stage B",{anchor:"middle",fill:"#8b949e",size:12});
+     const sb=d.stage_b||{};
+     const subs=[["mt",sb.prob_IDH_mt||0,"#a8dadc"],["1p19q",sb.prob_IDH_mt_1p19q||0,"#f1faee"],
+       ["wt",sb.prob_IDH_wt||0,"#457b9d"]];
+     const rowH=16,rowGap=22,groupH=rowGap*2+rowH;   // 3 rows, 2 gaps between them
+     const yBase=150-groupH/2;                        // center the whole group on row 150
+     for(let i=0;i<3;i++){const [nm,p,col]=subs[i];const yy=yBase+i*rowGap;
+       T(772,yy+9,nm,{fill:"#8b949e",size:9});
+       SV().appendChild(E("rect",{x:800,y:yy,width:90,height:rowH,rx:3,fill:"#242b35"}));
+       const bar=E("rect",{x:800,y:yy,width:0,height:rowH,rx:3,fill:col});SV().appendChild(bar);
+       // set the final width directly (not just via .animate()) so the bar is
+       // guaranteed to show the real value even if the WAAPI animation doesn't
+       // get a chance to commit before the next paint - this is the same bug
+       // that caused empty bars in the main Stage B step earlier.
+       bar.animate([{width:0},{width:90*p}],{duration:500,fill:"forwards"});
+       bar.setAttribute("width",90*p);}
+     await wait(500);if(tok!==RUN)return;
+     // 5. integrated diagnosis (bottom banner, full width)
+     const card=E("g");card.setAttribute("opacity","0");SV().appendChild(card);
+     card.appendChild(E("rect",{x:20,y:340,width:960,height:130,rx:14,fill:"#132029",stroke:"#457b9d","stroke-width":1.6}));
+     T(500,375,"Integrated diagnosis",{anchor:"middle",fill:"#8fb4c9",size:13});
+     const dx=(d.integrated&&(d.integrated.diagnosis||d.integrated.integrated_diagnosis))||"unknown";
+     const t2=E("text",{x:500,y:415,fill:"#fff","font-size":19,"font-weight":700,"text-anchor":"middle"});
+     t2.textContent=dx;card.appendChild(t2);
+     const conf=(d.integrated&&(d.integrated.confidence||d.integrated.integrated_confidence))||0;
+     T(500,448,"RN50 / RN50 · p95 · confidence "+conf.toFixed(2),{anchor:"middle",fill:"#e6edf3",size:13});
+     card.animate([{opacity:0},{opacity:1}],{duration:600,fill:"forwards"});
+   }},
+  ];
+
+  let cur=0, playing=false, playTimer=null;
+  function spinner(msg,sub){clr();
+    T(500,290,msg,{anchor:"middle",fill:"#e6edf3",size:15});
+    if(sub){
+      // wrap the sub-text so it doesn't overflow the SVG width
+      const words=sub.split(" ");const lines=[];let line="";
+      for(const w of words){if((line+" "+w).length>62){lines.push(line);line=w;}
+        else line=line?line+" "+w:w;}
+      if(line)lines.push(line);
+      lines.forEach((ln,i)=>T(500,320+i*20,ln,{anchor:"middle",fill:"#8b949e",size:12}));
+    }
+    const sp=E("circle",{cx:500,cy:250,r:14,fill:"none",stroke:"#5aa0c7","stroke-width":3,
+      "stroke-dasharray":"66","stroke-linecap":"round"});
+    const an=E("animateTransform",{attributeName:"transform",type:"rotate",
+      from:"0 500 250",to:"360 500 250",dur:"1s",repeatCount:"indefinite"});
+    sp.appendChild(an);SV().appendChild(sp);}
+
+  async function render(){
+    RUN++;const tok=RUN;STAGE_ID="methodStage";
+    if(err){clr();T(500,290,"Could not build the example:",{anchor:"middle",fill:"#f28b82",size:15});
+      T(500,320,err,{anchor:"middle",fill:"#8b949e",size:12});return;}
+    if(!DATA){spinner("Building the example — first run only…",
+      "runs the real RN50/RN50 pipeline + occlusion once (can take ~30–60 s), then caches to disk; later opens are instant");
+      await load();if(tok!==RUN)return;return render();}
+    const step=STEPS[cur];clr();
+    T(30,36,`Step ${cur+1} · ${step.t}`,{fill:"#5aa0c7",size:17,weight:700});
+    document.getElementById("methodNarr").innerHTML=step.n(DATA);
+    document.getElementById("mStepLbl").textContent=`${cur+1} / ${STEPS.length}`;
+    dots();
+    try{await step.f(tok,DATA);}catch(e){}
+    if(playing&&tok===RUN){playTimer=setTimeout(()=>{if(cur<STEPS.length-1){cur++;render();}
+      else{playing=false;playBtn();}},2000);}
+  }
+  function dots(){const d=document.getElementById("mDots");d.innerHTML="";
+    STEPS.forEach((_,i)=>{const b=document.createElement("div");
+      b.style.cssText=`width:9px;height:9px;border-radius:50%;cursor:pointer;`+
+        `background:${i===cur?"var(--accent)":"#39424d"}`;
+      b.onclick=()=>{cur=i;stop();render();};d.appendChild(b);});}
+  function playBtn(){document.getElementById("mPlay").textContent=playing?"⏸ Pause":"▶ Play";}
+  function stop(){playing=false;clearTimeout(playTimer);playBtn();}
+
+  function open(){cur=0;document.getElementById("methodModal").classList.remove("hidden");
+    render();}   // render() itself calls load(); calling load() separately here too
+                 // raced with it (the second call returned instantly under the
+                 // "already loading" guard), causing render() to recurse into
+                 // itself in a tight loop that never actually waited for data -
+                 // pegging the CPU with nothing ever painted.
+  function close(){stop();RUN++;document.getElementById("methodModal").classList.add("hidden");}
+  window.openMethod=open;     // used by the header button and inline handlers
+  window.closeMethod=close;   // the modal's ✕ Close button calls this inline
+
+  document.getElementById("btnMethod").onclick=open;
+  document.getElementById("mPrev").onclick=()=>{stop();if(cur>0){cur--;render();}};
+  document.getElementById("mNext").onclick=()=>{stop();if(cur<STEPS.length-1){cur++;render();}};
+  document.getElementById("mPlay").onclick=()=>{playing=!playing;playBtn();
+    if(playing){if(cur===STEPS.length-1)cur=0;render();}else clearTimeout(playTimer);};
+  document.addEventListener("keydown",e=>{
+    if(document.getElementById("methodModal").classList.contains("hidden"))return;
+    if(e.key==="Escape")close();
+    else if(e.key==="ArrowRight"){stop();if(cur<STEPS.length-1){cur++;render();}}
+    else if(e.key==="ArrowLeft"){stop();if(cur>0){cur--;render();}}});
+
+  // expose the step renderers so a live Run full pipeline can narrate into the
+  // main canvas using the same visuals (see runPipeline live-mode).
+  return {STEPS, open, close,
+    renderStepInto:async function(stageId,stepIdx,data,tokRef){
+      const prev=STAGE_ID;STAGE_ID=stageId;RUN++;const tok=RUN;
+      try{await STEPS[stepIdx].f(tok,data);}catch(e){}
+      STAGE_ID=prev;}};
+})();
+
+</script>
+</body>
+</html>

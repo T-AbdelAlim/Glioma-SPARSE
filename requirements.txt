@@ -1,15 +1,15 @@
+# Direct dependencies, unpinned. For the exact working versions use
+# requirements-lock.txt (setup_env.ps1 / setup_env.sh install that one).
+
 # ============================================================
 # PYTORCH (INSTALL SEPARATELY FOR CUDA)
 # ============================================================
 
-# CUDA 12.4 (deskt.)
-# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
-
-# CUDA 12.1 (lapt.)
-# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# CUDA 12.6 (current environment, see requirements-lock.txt)
+# pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 
 # CPU ONLY
-# pip install torch torchvision torchaudio
+# pip install torch torchvision
 
 # ============================================================
 # CORE
@@ -17,6 +17,7 @@
 
 numpy
 pandas
+scipy
 scikit-learn
 matplotlib
 opencv-python
@@ -46,4 +47,9 @@ pydantic
 openpyxl
 pywebview
 
-# pyinstaller  # only needed to build the standalone .exe (build_exe.py)
+# ============================================================
+# OPTIONAL
+# ============================================================
+
+# nvidia-ml-py thop   # GPU energy + FLOP logging (scripts/lib/profiling.py)
+# pyinstaller         # only needed to build the standalone .exe (build_exe.py)
