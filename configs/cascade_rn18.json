@@ -1,0 +1,157 @@
+{
+  "out_dir": "results/cascade_refinement_rn18",
+  "reference": "S0",
+  "runs": {
+    "A0": "results/e2e_multi_rn18_A0/per_slide.csv",
+    "Actrl": "results/e2e_multi_rn18_Actrl/per_slide.csv",
+    "Amt": "results/e2e_multi_rn18_Amt/per_slide.csv"
+  },
+  "systems": [
+    {
+      "label": "S0",
+      "run": "A0",
+      "b": "B0"
+    },
+    {
+      "label": "S0+TTA",
+      "run": "A0",
+      "b": "B0",
+      "tta": true
+    },
+    {
+      "label": "S0-c",
+      "run": "A0",
+      "b": "Bc"
+    },
+    {
+      "label": "S1",
+      "run": "A0",
+      "b": "Br"
+    },
+    {
+      "label": "S1+TTA",
+      "run": "A0",
+      "b": "Br",
+      "tta": true
+    },
+    {
+      "label": "A-ctrl",
+      "run": "Actrl",
+      "b": "B0"
+    },
+    {
+      "label": "A-mt",
+      "run": "Amt",
+      "b": "B0"
+    },
+    {
+      "label": "S2",
+      "run": "Amt",
+      "b": "Bc"
+    },
+    {
+      "label": "S12",
+      "run": "Amt",
+      "b": "Br"
+    },
+    {
+      "label": "S12+TTA",
+      "run": "Amt",
+      "b": "Br",
+      "tta": true
+    },
+    {
+      "label": "S2+fuse",
+      "run": "Amt",
+      "b": "Bc",
+      "fuse": {
+        "stage_b_val": "ResNet18_output/training_output_stageB_ft_continue/rn18_Amt_stageB_continue_fold*/val_predictions.npz",
+        "stage_a_val": "ResNet18_output/training_output_stageA_mt/*_split_0*/val_predictions.npz"
+      }
+    },
+    {
+      "label": "S12+TTA+fuse",
+      "run": "Amt",
+      "b": "Br",
+      "tta": true,
+      "fuse": {
+        "stage_b_val": "ResNet18_output/training_output_stageB_ft_refined/rn18_Amt_stageB_refined_fold*/val_predictions_tta.npz",
+        "stage_a_val": "ResNet18_output/training_output_stageA_mt/*_split_0*/val_predictions.npz"
+      }
+    }
+  ],
+  "pairs": [
+    [
+      "S0-c",
+      "S1"
+    ],
+    [
+      "A-ctrl",
+      "A-mt"
+    ],
+    [
+      "S0",
+      "S12"
+    ],
+    [
+      "S0-c",
+      "S2"
+    ],
+    [
+      "S0",
+      "S0-c"
+    ],
+    [
+      "S0",
+      "S0+TTA"
+    ],
+    [
+      "S0",
+      "S1"
+    ],
+    [
+      "S0-c",
+      "S1+TTA"
+    ],
+    [
+      "S0",
+      "S1+TTA"
+    ],
+    [
+      "S0",
+      "A-ctrl"
+    ],
+    [
+      "S0",
+      "A-mt"
+    ],
+    [
+      "A-mt",
+      "S2"
+    ],
+    [
+      "S2",
+      "S2+fuse"
+    ],
+    [
+      "S1",
+      "S12"
+    ],
+    [
+      "S2",
+      "S12"
+    ],
+    [
+      "S12",
+      "S12+TTA"
+    ],
+    [
+      "S12",
+      "S12+TTA+fuse"
+    ],
+    [
+      "S0",
+      "S12+TTA+fuse"
+    ]
+  ]
+}
