@@ -68,6 +68,7 @@
     border-radius:7px;overflow:hidden}
   .seg button{margin:0;border-radius:0;background:transparent;font-size:12px;padding:7px}
   .seg button.on{background:var(--accent);color:#fff}
+  .seg button.disabled{opacity:.35;cursor:not-allowed}
   .toggle{display:flex;align-items:center;gap:8px;cursor:pointer;
     padding:5px 0;font-size:13px;user-select:none}
   .toggle .box{width:36px;height:20px;border-radius:20px;background:var(--panel2);
@@ -118,29 +119,35 @@
   <div class="dev" id="dev">device: …</div>
 </header>
 
-<!-- METHODOLOGY WALKTHROUGH -->
+<!-- METHODOLOGY EXPLAINER (animations and figures of the GL-SPARSE talk; media in /explainer/) -->
 <div id="methodModal" class="hidden" style="position:fixed;inset:0;z-index:40;
   background:rgba(8,11,16,.97);display:flex;flex-direction:column;padding:18px 24px">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
     <div>
       <div style="font-size:17px;font-weight:700">How Glioma-SPARSE works</div>
-      <div id="methodSub" style="font-size:12px;color:var(--mut)">a two-stage weakly-supervised pipeline</div>
+      <div id="methodSub" style="font-size:12px;color:var(--mut)">grade at low resolution, molecular type from a few high-resolution tiles</div>
     </div>
     <button onclick="closeMethod()" class="sec" style="width:auto;margin:0;padding:8px 14px">✕ Close</button>
   </div>
-  <div style="flex:1;position:relative;background:#0b0e13;border:1px solid var(--line);
-    border-radius:12px;overflow:hidden">
-    <svg id="methodStage" viewBox="0 0 1000 620" preserveAspectRatio="xMidYMid meet"
-      style="width:100%;height:100%"></svg>
+  <div style="flex:1;min-height:0;display:flex;gap:18px">
+    <div style="flex:2.3;min-width:0;display:flex;align-items:center;justify-content:center;
+      background:#ffffff;border:1px solid var(--line);border-radius:12px;overflow:hidden;padding:10px">
+      <video id="mVideo" muted playsinline controls style="max-width:100%;max-height:100%;display:none"></video>
+      <img id="mImage" alt="" style="max-width:100%;max-height:100%;display:none">
+    </div>
+    <div style="flex:1;min-width:280px;max-width:430px;overflow:auto;background:var(--panel);
+      border:1px solid var(--line);border-radius:12px;padding:16px 18px">
+      <div id="mStepNo" style="font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut)"></div>
+      <div id="mTitle" style="font-size:18px;font-weight:700;margin:4px 0 10px"></div>
+      <div id="methodNarr" style="font-size:13.5px;line-height:1.55;color:var(--ink)"></div>
+    </div>
   </div>
-  <div id="methodNarr" style="margin:10px 2px;font-size:13.5px;line-height:1.5;
-    min-height:44px;color:var(--ink)"></div>
-  <div style="display:flex;align-items:center;gap:12px">
+  <div style="display:flex;align-items:center;gap:12px;margin-top:12px">
     <button id="mPrev" class="sec" style="width:auto;margin:0;padding:8px 16px">← Prev</button>
-    <button id="mPlay" style="width:auto;margin:0;padding:8px 20px">▶ Play</button>
+    <button id="mPlay" style="width:auto;margin:0;padding:8px 20px">▶ Play all</button>
     <button id="mNext" class="sec" style="width:auto;margin:0;padding:8px 16px">Next →</button>
     <div id="mDots" style="display:flex;gap:6px;margin-left:8px"></div>
-    <div id="mStepLbl" style="margin-left:auto;font-size:12px;color:var(--mut)"></div>
+    <div id="mStepLbl" style="margin-left:auto;font-size:12px;color:var(--mut)">← → keys to navigate · Esc to close</div>
   </div>
 </div>
 
@@ -177,11 +184,16 @@
       </label>
       <label class="row" style="margin-top:10px">Stage B
         <span class="seg" id="segB">
-          <button data-b="resnet18">RN18</button>
-          <button data-b="resnet50" class="on">RN50</button>
+          <button data-b="resuni" id="btnResuni" class="on">UNI2-h</button>
         </span>
       </label>
-      <label class="row" style="margin-top:4px">Stage B best-by
+      <label class="row" style="margin-top:4px">Stage B tiles
+        <select id="selTiles" style="width:auto;margin:0;padding:3px 6px">
+          <option>8</option><option>16</option><option>32</option><option selected>64</option>
+          <option>128</option><option>256</option><option>512</option><option>1024</option>
+        </select>
+      </label>
+      <label class="row" style="margin-top:4px;display:none" id="rowBMetric">Stage B best-by
         <span class="seg" id="segBMetric">
           <button data-m="f1" class="on">F1</button>
           <button data-m="auc">AUC</button>
@@ -189,17 +201,18 @@
         </span>
       </label>
       <div class="status" id="modelsInfo" style="margin-top:6px"></div>
+      <div class="status" id="resuniInfo" style="margin-top:2px"></div>
     </div>
 
     <div class="group">
       <h3>3 · Parameters</h3>
       <label class="row">Risk percentile <span class="val" id="pctVal">95</span></label>
       <input type="range" id="pct" min="80" max="97" value="95" step="1">
-      <div class="status" id="pctInfo" style="margin-top:2px">top 5% → up to 4 of 64 tiles into Stage B</div>
+      <div class="status" id="pctInfo" style="margin-top:2px">top 5% → up to 4 of 64 grid cells as Stage B regions</div>
       <div class="toggle on" id="tSignal" style="margin-top:10px"><div class="box"></div>Signal map overlay</div>
       <div class="toggle on" id="tPred"><div class="box"></div>Class predictions</div>
       <div class="toggle" id="tRaw"><div class="box"></div>Raw values (p, uncertainty)</div>
-      <div class="toggle" id="tOccl"><div class="box"></div>Stage B occlusion heatmap</div>
+      <div class="toggle" id="tOccl"><div class="box"></div>Stage B evidence map</div>
     </div>
 
     <div class="group">
@@ -300,7 +313,7 @@
             <g id="inspOccl"></g>
           </svg>
           <div id="inspZoomWrap" class="hidden" style="margin-top:10px">
-            <div style="font-size:11px;color:var(--mut);margin-bottom:4px">
+            <div id="inspZoomLbl" style="font-size:11px;color:var(--mut);margin-bottom:4px">
               Top occlusion cell · level-0 zoom</div>
             <img id="inspZoom" style="width:180px;height:180px;border-radius:6px;
               border:2px solid #fde047;object-fit:cover">
@@ -313,7 +326,7 @@
               class="sec">✕ Close</button>
           </div>
           <div id="inspMeta" class="card"></div>
-          <div style="font-size:11px;text-transform:uppercase;letter-spacing:.7px;
+          <div id="inspBarsLbl" style="font-size:11px;text-transform:uppercase;letter-spacing:.7px;
             color:var(--mut);margin:14px 0 6px">Stage B molecular prediction</div>
           <div id="inspBars"></div>
         </div>
@@ -343,14 +356,14 @@ const COL={control:"#adcba3",low_grade:"#ffe1a8",high_grade:"#e26d5c",
 const INK={control:"#3a3a2e",low_grade:"#6b4e18",high_grade:"#fff",
   IDH_mt:"#1d3a3d",IDH_mt_1p19q:"#2a3a30",IDH_wt:"#fff"};
 
-let S={session:null,archA:"resnet50",archB:"resnet50",metricA:"f1",metricB:"f1",stainProfile:null,
+let S={session:null,archA:"resnet50",archB:"resuni",nTiles:64,tileOptions:{},metricA:"f1",metricB:"f1",stainProfile:null,
   signal:true,pred:true,raw:false,occl:false,
   thumb:null,thumbSize:2048,thumbW:2048,thumbH:2048,wsiDim:null,tissueInThumb:null,
   gridR:8,gridC:8,
   selected:[],risk:null,lastRun:null,
   lastCfg:null,_fadeInKeys:null,_occlRevealOnly:false,
   patchCache:{},occlCache:{},occlAvailable:true,savePatches:true};   // key "r_c" -> patch record / occlusion, reused across percentile changes
-const ARCH_LABEL={resnet18:"ResNet18",resnet50:"ResNet50"};
+const ARCH_LABEL={resnet18:"ResNet18",resnet50:"ResNet50",resuni:"UNI2-h"};
 const METRIC_LABEL={f1:"F1",auc:"AUC",acc:"Acc"};
 function updateModelsInfo(A,B){
   const el=$("modelsInfo");if(!el)return;
@@ -360,7 +373,38 @@ function updateModelsInfo(A,B){
 }
 
 // ---- config ----
-fetch("/api/config").then(r=>r.json()).then(c=>{$("dev").textContent="device: "+c.device;});
+S.resuniAvailable=false;S.resuniConfigs={};S.tileOptions={};
+fetch("/api/config").then(r=>r.json()).then(c=>{
+  $("dev").textContent="device: "+c.device;
+  S.resuniAvailable=!!c.resuni_available;S.resuniConfigs=c.resuni_configs||{};S.tileOptions=c.resuni_tile_options||{};
+  updateResuniUI();
+});
+
+// ResUNI's trained head depends on the CURRENT Stage-A choice (only resnet18/f1,
+// resnet50/f1 and resnet50/auc have one); grey the button out otherwise, and fall back
+// to resnet50 for Stage B if it was selected but just became unsupported.
+function resuniSupported(){return S.resuniConfigs[S.archA+":"+S.metricA]===true;}
+function updateResuniUI(){
+  const btn=$("btnResuni");if(!btn)return;
+  const ok=S.resuniAvailable&&resuniSupported();
+  btn.classList.toggle("disabled",!ok);
+  btn.title=!S.resuniAvailable?
+    "UNI2-h checkpoint not found on this machine (see README to enable it)":
+    !ok?`No trained UNI2-h head for Stage A = ${ARCH_LABEL[S.archA]}/${METRIC_LABEL[S.metricA]}`:
+    "Stage A regions + UNI2-h foundation-model features + a tiny logistic head (5-fold ensemble)";
+  // Stage B is UNI2-h only; tile counts are limited to those with a head trained for this Stage A
+  S.archB="resuni";
+  const opts=S.tileOptions[S.archA+":"+S.metricA]||[];
+  [...$("selTiles").options].forEach(o=>{o.disabled=!opts.includes(+o.value);});
+  if(!opts.includes(S.nTiles)&&opts.length){S.nTiles=opts.includes(64)?64:opts[0];$("selTiles").value=S.nTiles;}
+  $("resuniInfo").textContent=!ok?
+    "No UNI2-h head for this Stage A choice: use ResNet-50 (F1 or AUC) or ResNet-18 (F1).":
+    `Molecular type from ${S.nTiles} UNI2-h tiles sampled inside Stage A's regions (5-fold ensemble)`+
+    (opts.length<8?` · tile counts with a trained head: ${opts.join(", ")}`:"");
+}
+
+// ---- Stage B tile count ----
+$("selTiles").onchange=()=>{S.nTiles=+$("selTiles").value;updateResuniUI();};
 
 // ---- toggles & segments ----
 function bindToggle(id,key){$(id).onclick=()=>{S[key]=!S[key];$(id).classList.toggle("on",S[key]);
@@ -380,13 +424,13 @@ $("tOccl").onclick=async()=>{
       let done=0;
       try{
         for(const p of need){
-          setBusy(`Computing occlusion maps… ${done}/${need.length} (r${p.row}c${p.col})`);
-          st.innerHTML=`<span class="spinner"></span>occlusion r${p.row}c${p.col}…`;
+          setBusy(`Preparing Stage B evidence… ${done}/${need.length} (r${p.row}c${p.col})`);
+          st.innerHTML=`<span class="spinner"></span>evidence r${p.row}c${p.col}…`;
           S.lastRun.occl[p.row+"_"+p.col]=await API("stage_b_occlusion",
             {session_id:S.session,row:p.row,col:p.col,arch:S.archB,metric:S.metricB});
           done++;
         }
-        st.textContent="✓ occlusion ready";
+        st.textContent="✓ evidence ready";
       }finally{
         hideBusy();
         $("tOccl").style.pointerEvents="";$("tOccl").style.opacity="";
@@ -453,7 +497,7 @@ function setOcclToggleEnabled(on){
   const t=$("tOccl");
   if(on){t.style.pointerEvents="";t.style.opacity="";t.title="";}
   else{t.style.pointerEvents="none";t.style.opacity=".4";
-    t.title="No Stage B occlusion data in this result (run batch with occlusion on to include it)";}
+    t.title="No Stage B evidence in this result (run the batch with the evidence map on to include it)";}
 }
 
 // rough single-run progress bar under Replay
@@ -465,11 +509,13 @@ function runProgress(frac,label){
   txt.textContent=label||"";
 }
 $("segA").onclick=e=>{if(e.target.dataset.a){S.archA=e.target.dataset.a;
-  [...$("segA").children].forEach(b=>b.classList.toggle("on",b.dataset.a===S.archA));}};
-$("segB").onclick=e=>{if(e.target.dataset.b){S.archB=e.target.dataset.b;
-  [...$("segB").children].forEach(b=>b.classList.toggle("on",b.dataset.b===S.archB));}};
+  [...$("segA").children].forEach(b=>b.classList.toggle("on",b.dataset.a===S.archA));updateResuniUI();}};
+$("segB").onclick=e=>{if(e.target.dataset.b){
+  if(e.target.dataset.b==="resuni"&&!(S.resuniAvailable&&resuniSupported()))return;  // greyed out
+  S.archB=e.target.dataset.b;
+  [...$("segB").children].forEach(b=>b.classList.toggle("on",b.dataset.b===S.archB));updateResuniUI();}};
 $("segAMetric").onclick=e=>{if(e.target.dataset.m){S.metricA=e.target.dataset.m;
-  [...$("segAMetric").children].forEach(b=>b.classList.toggle("on",b.dataset.m===S.metricA));}};
+  [...$("segAMetric").children].forEach(b=>b.classList.toggle("on",b.dataset.m===S.metricA));updateResuniUI();}};
 $("segBMetric").onclick=e=>{if(e.target.dataset.m){S.metricB=e.target.dataset.m;
   [...$("segBMetric").children].forEach(b=>b.classList.toggle("on",b.dataset.m===S.metricB));}};
 
@@ -494,7 +540,7 @@ $("pct").oninput=e=>{
   $("pctVal").textContent=e.target.value;
   const pct=+e.target.value, ncell=S.gridR*S.gridC;
   const maxT=Math.max(1,Math.ceil(ncell*(100-pct)/100));
-  $("pctInfo").textContent=`top ${100-pct}% → up to ${maxT} of ${ncell} tiles into Stage B`;
+  $("pctInfo").textContent=`top ${100-pct}% → up to ${maxT} of ${ncell} grid cells as Stage B regions`;
 };
 // live incremental update when the slider is released (not on every pixel).
 // Raising the percentile only removes tiles (no compute); lowering extracts the
@@ -555,14 +601,15 @@ async function livePercentile(pct){
     }
     // Stage B over the new tile set (fast: one pass per tile)
     st.innerHTML='<span class="spinner"></span>Stage B molecular…';
-    const B=await API("stage_b",{session_id:S.session,arch:S.archB,metric:S.metricB});
+    const B=await API("stage_b",{session_id:S.session,arch:S.archB,metric:S.metricB,n_tiles:S.nTiles});
+    if(S.archB==="resuni")S.occlCache={};   // new 64-tile draw -> evidence must follow it
     // occlusion: reuse cache; compute only for tiles that still lack it
     let occl={};
     if(S.occl){
       for(const sel of R.selected){
         const key=sel.row+"_"+sel.col;
         if(S.occlCache[key]){occl[key]=S.occlCache[key];continue;}
-        st.innerHTML=`<span class="spinner"></span>occlusion r${sel.row}c${sel.col}…`;
+        st.innerHTML=`<span class="spinner"></span>evidence r${sel.row}c${sel.col}…`;
         occl[key]=await API("stage_b_occlusion",
           {session_id:S.session,row:sel.row,col:sel.col,arch:S.archB,metric:S.metricB});
         S.occlCache[key]=occl[key];
@@ -678,13 +725,15 @@ function livePreview(phase, data){
     const t=mk("text",{x:330,y:100,fill:"#8b949e","font-size":16,"text-anchor":"middle"});
     t.textContent="Thumbnail · 2048×2048 px · Stage A grading…";svg.appendChild(t);
   }else if(phase==="signal"){
-    // clear the plain thumbnail + its label first, then show ONLY the signal map
+    // clear the plain thumbnail's label, then redraw the thumbnail with the signal map
+    // over it (kept semi-transparent so the tissue underneath still shows through)
     svg.innerHTML="";
+    svg.appendChild(mk("image",{href:S.thumb,x:120,y:120,width:420,height:420}));
     const R=data;const gr=R.grid_rows||8,gc=R.grid_cols||8,cw=420/gc,ch=420/gr;
     for(let r=0;r<gr;r++)for(let c=0;c<gc;c++){
       const e=mk("rect",{x:120+c*cw,y:120+r*ch,width:cw,height:ch,fill:rc(R.risk_grid[r][c]),
         "stroke":"#0b0e13","stroke-width":0.4,opacity:0});svg.appendChild(e);
-      e.animate([{opacity:0},{opacity:.9}],{duration:220,delay:(r*gc+c)*8,fill:"forwards"});}
+      e.animate([{opacity:0},{opacity:.3}],{duration:220,delay:(r*gc+c)*8,fill:"forwards"});}
     const t=mk("text",{x:330,y:100,fill:"#e6edf3","font-size":16,"text-anchor":"middle"});
     t.textContent="Stage A signal map";svg.appendChild(t);
     (R.selected||[]).forEach(s=>svg.appendChild(mk("rect",{x:120+s.col*cw,y:120+s.row*ch,
@@ -716,10 +765,10 @@ async function runPipeline(animate){
   $("btnMethod").style.pointerEvents="none";
   lockUI();
   const pct=+$("pct").value;
-  const cfg={archA:S.archA,archB:S.archB,metricA:S.metricA,metricB:S.metricB,pct};
+  const cfg={archA:S.archA,archB:S.archB,metricA:S.metricA,metricB:S.metricB,nTiles:S.nTiles,pct};
   const prev=S.lastCfg;
   const archAchanged = !prev || prev.archA!==cfg.archA || prev.metricA!==cfg.metricA;
-  const archBchanged = !prev || prev.archB!==cfg.archB || prev.metricB!==cfg.metricB;
+  const archBchanged = !prev || prev.archB!==cfg.archB || prev.metricB!==cfg.metricB || prev.nTiles!==cfg.nTiles;
   const pctChanged   = !prev || prev.pct!==cfg.pct;
   try{
     if(animate&&S.thumb)livePreview("thumb");
@@ -768,7 +817,8 @@ async function runPipeline(animate){
       patches.some((p,i)=>!S.lastRun.patches[i]||S.lastRun.patches[i].row!==p.row||S.lastRun.patches[i].col!==p.col);
     if(!archBchanged && !tilesChanged && S.lastRun){B=S.lastRun.B;}
     else{st.innerHTML='<span class="spinner"></span>Stage B molecular…';
-      B=await API("stage_b",{session_id:S.session,arch:S.archB,metric:S.metricB});}
+      B=await API("stage_b",{session_id:S.session,arch:S.archB,metric:S.metricB,n_tiles:S.nTiles});
+      if(S.archB==="resuni")S.occlCache={};}   // new 64-tile draw -> evidence must follow it
 
     // Occlusion: reuse session cache; compute only tiles that lack it.
     let occl={};
@@ -779,7 +829,7 @@ async function runPipeline(animate){
       for(const sel of R.selected){
         const key=sel.row+"_"+sel.col;
         if(S.occlCache[key]){occl[key]=S.occlCache[key];continue;}
-        st.innerHTML=`<span class="spinner"></span>occlusion r${sel.row}c${sel.col}…`;
+        st.innerHTML=`<span class="spinner"></span>evidence r${sel.row}c${sel.col}…`;
         runProgress(0.80+0.15*(oi/Math.max(1,occNeed.length)),
           `occlusion ${oi+1}/${occNeed.length}`);
         occl[key]=await API("stage_b_occlusion",
@@ -871,7 +921,7 @@ async function animateFrom(run){
       const rect=el("rect",{x:L.thumb.x+c*cw,y:L.thumb.y+r*ch,width:cw,height:ch,
         fill:heat(v)});
       svg.appendChild(rect);
-      fadeIn(rect,0.45,{duration:500,delay:INSTANT?0:(r*S.gridC+c)*4});
+      fadeIn(rect,0.3,{duration:500,delay:INSTANT?0:(r*S.gridC+c)*4});
     }
     label(svg,L.thumb.x,L.thumb.y+L.thumb.s+ (S.pred?70:22),
       `Stage A signal map · patch-injection · ${ARCH_LABEL[S.archA]}`);
@@ -1006,7 +1056,21 @@ async function animateFrom(run){
     else if(!INSTANT)g.animate([{opacity:0},{opacity:1}],{duration:350,fill:"forwards"});
     if(!INSTANT)await sleep(run.patches.length>6?80:220);
     // occlusion overlay if on
-    if(S.occl&&run.occl[p.row+"_"+p.col]){
+    if(S.occl&&run.occl[p.row+"_"+p.col]&&run.occl[p.row+"_"+p.col].kind==="tiles"){
+      const occ=run.occl[p.row+"_"+p.col];
+      drawTileEvidence(g,occ,p._px,p._py,ps,isAdded||S._occlRevealOnly||!INSTANT,isAdded?400:0);
+      if(occ.top_tile&&occ.top_zoom){
+        const t=occ.top_tile,zs=ps*0.42,zx=p._px+ps-zs-3,zy=p._py+ps-zs-3;
+        const cx=p._px+(t.x+t.w/2)*ps, cy=p._py+(t.y+t.h/2)*ps;
+        g.appendChild(el("path",{d:`M${cx},${cy} L${zx+zs/2},${zy+zs/2}`,stroke:"#fde047","stroke-width":1,
+          "stroke-dasharray":"3 3",opacity:.8,fill:"none"}));
+        g.appendChild(el("image",{href:occ.top_zoom,x:zx,y:zy,width:zs,height:zs}));
+        g.appendChild(el("rect",{x:zx,y:zy,width:zs,height:zs,fill:"none",stroke:"#fde047","stroke-width":2}));
+        if(S.raw){const zl=el("text",{x:zx+2,y:zy-3,fill:"#fde047","font-size":8,"font-weight":600});
+          zl.textContent=`top tile · ${occ.n_in_region}/${occ.n_total} sampled here`;g.appendChild(zl);}
+      }
+    }
+    else if(S.occl&&run.occl[p.row+"_"+p.col]&&run.occl[p.row+"_"+p.col].importance_grid){
       const occ=run.occl[p.row+"_"+p.col];
       const og=occ.grid?occ.grid[0]:8;      // occlusion grid from backend
       const cellp=ps/og;
@@ -1058,9 +1122,11 @@ async function animateFrom(run){
   const ncell=(run.R.grid_rows||8)*(run.R.grid_cols||8);
   const cnt=el("text",{x:sb.x+sb.w/2,y:sb.y+sb.h+16,fill:"#8b949e","font-size":10,
     "text-anchor":"middle"});
-  cnt.textContent=`${nsel} tile${nsel===1?"":"s"} (p${run.R.percentile} of ${ncell}) → soft vote`;
+  cnt.textContent=`${nsel} region${nsel===1?"":"s"} (p${run.R.percentile} of ${ncell} tiles) → `+
+    (S.archB==="resuni"?"UNI2-h tiling":"soft vote");
   box.appendChild(cnt);
-  if(+run.R.percentile!==95){
+  const offPct=+run.R.percentile!==95;   // extra line below cnt -> push "Molecular prediction" down too
+  if(offPct){
     const dn=el("text",{x:sb.x+sb.w/2,y:sb.y+sb.h+28,fill:"#6b7686","font-size":8.5,
       "text-anchor":"middle"});
     dn.textContent="deployed pipeline uses p95";box.appendChild(dn);
@@ -1081,7 +1147,7 @@ async function animateFrom(run){
   if(_tok!==ANIM_RUN)return;
   // 7. Stage B prediction bars + subtype pill
   if(S.pred){
-    const by=sb.y+sb.h+34;
+    const by=sb.y+sb.h+34+(offPct?14:0);
     label(svg,sb.x,by-4,"Molecular prediction");
     probBars(svg,sb.x,by+6,run.B.slide_probs,COL,sb.w);
     const sub=run.B.subtype_pred;
@@ -1125,6 +1191,21 @@ function heat(v){ // 0..1 -> blue->yellow->red (RdYlBu_r-ish)
   return `rgb(${c[0]},${c[1]},${c[2]})`;
 }
 
+// ---- UNI2-h tile evidence: the sampled tiles of a region, coloured by their exact contribution ----
+function drawTileEvidence(g,occ,x0,y0,size,reveal,delay0){
+  for(const [i,t] of occ.tiles.entries()){
+    const r=el("rect",{x:x0+t.x*size,y:y0+t.y*size,width:Math.max(2,t.w*size),height:Math.max(2,t.h*size),
+      fill:heat(t.rank),stroke:heat(t.rank),"stroke-width":1.2,"fill-opacity":.55,opacity:reveal?0:1});
+    const tt=document.createElementNS(SVGNS,"title");
+    tt.textContent=`contribution ${t.v>=0?"+":""}${t.v.toFixed(2)} (rank ${Math.round((1-t.rank)*occ.n_total+0.5)} of ${occ.n_total})`;
+    r.appendChild(tt);g.appendChild(r);
+    if(reveal)r.animate([{opacity:0},{opacity:1}],{duration:300,delay:(delay0||0)+i*20,fill:"forwards"});
+  }
+  if(occ.top_tile){const t=occ.top_tile;
+    g.appendChild(el("rect",{x:x0+t.x*size-1,y:y0+t.y*size-1,width:Math.max(2,t.w*size)+2,height:Math.max(2,t.h*size)+2,
+      fill:"none",stroke:"#fde047","stroke-width":2}));}
+}
+
 // ---- click-to-inspect overlay ----
 function htmlBars(container,probs,colors){
   container.innerHTML="";
@@ -1150,14 +1231,25 @@ function openInspect(p,B,occ){
   const probs=pp?pp.probs:B.slide_probs;
   const call=pp?pp.pred:B.subtype_pred;
   const conf=pp?pp.confidence:B.confidence;
+  const isTiles=!!(occ&&occ.kind==="tiles");
+  const sgn=v=>(v>=0?"+":"")+v.toFixed(2);
+  $("inspBarsLbl").textContent=(B.per_patch||[]).length?"Stage B molecular prediction":
+    "Stage B molecular prediction · slide level (all sampled tiles)";
   $("inspMeta").innerHTML=
     `<div><span class="k">Risk R:</span> ${p.risk!=null?p.risk.toFixed(2):"—"}</div>`+
     `<div><span class="k">Tissue:</span> ${p.tissue!=null?p.tissue.toFixed(2):"—"}</div>`+
     (p.wsi_bbox?`<div><span class="k">Level-0 region:</span> ${p.wsi_bbox[2]}×${p.wsi_bbox[3]} px</div>`:"")+
-    `<div><span class="k">Stage B call:</span> <b>${call.replace("IDH_","IDH-").replace("_"," ")}</b> · conf ${conf.toFixed(2)}</div>`;
+    `<div><span class="k">Stage B call:</span> <b>${call.replace("IDH_","IDH-").replace("_"," ")}</b> · conf ${conf.toFixed(2)}</div>`+
+    (isTiles&&S.occl?`<div><span class="k">Sampled tiles in this region:</span> ${occ.n_in_region} of ${occ.n_total}</div>`+
+      (occ.region_mean!=null?`<div><span class="k">Evidence for ${occ.pred.replace("IDH_","IDH-").replace("_"," ")}:</span> `+
+        `${sgn(occ.region_mean)} per tile here · ${sgn(occ.slide_mean)} slide average</div>`:"")+
+      (occ.top_tile?`<div><span class="k">Top tile:</span> ${sgn(occ.top_tile.v)} (rank ${occ.top_tile.rank_among_all} of ${occ.n_total})</div>`:""):"");
   htmlBars($("inspBars"),probs,COL);
   // occlusion overlay: shown only when the toggle is on AND data exists,
   // mirroring exactly what the small patch shows.
+  const showTiles=S.occl&&isTiles;
+  if(showTiles)drawTileEvidence(og,occ,0,0,D,false,0);
+  $("inspZoomLbl").textContent=isTiles?"Most influential sampled tile · 256 px at 20×":"Top occlusion cell · level-0 zoom";
   const showOcc=S.occl&&occ&&occ.importance_grid;
   if(showOcc){
     const grid=occ.grid?occ.grid[0]:8;const cell=D/grid;
@@ -1172,7 +1264,7 @@ function openInspect(p,B,occ){
     }
   }
   // level-0 zoom inset: show when occlusion is on and a zoom exists
-  if(showOcc&&occ.top_zoom){
+  if((showOcc||showTiles)&&occ.top_zoom){
     $("inspZoomWrap").classList.remove("hidden");
     $("inspZoom").src=occ.top_zoom;
   }else{$("inspZoomWrap").classList.add("hidden");}
@@ -1302,7 +1394,7 @@ $("btnBatchRun").onclick=async()=>{
   let runId, total;
   try{
     const start=await API("batch",{input_folder:batchCfg.input,output_location:batchCfg.output,
-      archA:S.archA,archB:S.archB,metricA:S.metricA,metricB:S.metricB,
+      archA:S.archA,archB:S.archB,metricA:S.metricA,metricB:S.metricB,n_tiles:S.nTiles,
       percentile:+$("pct").value,occlusion:S.occl,
       recursive:batchCfg.recursive,save_patches:S.savePatches,stain_profile:S.stainProfile});
     runId=start.run_id; total=start.total;
@@ -1442,6 +1534,7 @@ async function loadFolder(folder,fromBatch=false){
     };
     // reconstruct occlusion overlays from the saved grids, if present
     for(const p of d.patches){
+      if(p.tile_evidence){run.occl[p.row+"_"+p.col]={...p.tile_evidence,top_zoom:p.top_zoom||null};continue;}
       if(p.occl_grid){
         run.occl[p.row+"_"+p.col]={
           importance_grid:p.occl_grid,
@@ -1459,6 +1552,7 @@ async function loadFolder(folder,fromBatch=false){
     // reflect the settings that produced this result in the sidebar controls
     if(d.archA){S.archA=d.archA;[...$("segA").children].forEach(b=>b.classList.toggle("on",b.dataset.a===d.archA));}
     if(d.archB){S.archB=d.archB;[...$("segB").children].forEach(b=>b.classList.toggle("on",b.dataset.b===d.archB));}
+    if(d.stage_b&&d.stage_b.n_tiles){S.nTiles=d.stage_b.n_tiles;$("selTiles").value=S.nTiles;}
     if(d.metricA){S.metricA=d.metricA;[...$("segAMetric").children].forEach(b=>b.classList.toggle("on",b.dataset.m===d.metricA));}
     if(d.metricB){S.metricB=d.metricB;[...$("segBMetric").children].forEach(b=>b.classList.toggle("on",b.dataset.m===d.metricB));}
     if(d.percentile!=null){$("pct").value=d.percentile;$("pctVal").textContent=d.percentile;}
@@ -1479,362 +1573,87 @@ $("btnSave").onclick=async()=>{
   lockUI();
   try{const r=await API("save",{session_id:S.session});
     $("saveStatus").innerHTML=`✓ saved ${r.saved.length} files<br>`
-      +`<span style="color:var(--mut)">${r.report.split(/[\\/]/).pop()}</span>`;
+      +`<span style="color:var(--mut)">${r.report?r.report.split(/[\\/]/).pop():"(no report.xlsx found)"}</span>`;
   }catch(e){$("saveStatus").textContent="✕ "+e.message;}
   unlockUI();
 };
 
 // ============================================================
-// METHODOLOGY WALKTHROUGH  (real precomputed pipeline, cached)
-// Loads /api/methodology once (backend computes + caches to disk; later opens
-// are instant). Shows the real injection, real signal map, real patches, real
-// Stage B probabilities and occlusion. The same step renderers are reused to
-// live-narrate an actual Run full pipeline (see METHOD.renderLive).
+// METHODOLOGY EXPLAINER  (animations and figures of the GL-SPARSE talk)
+// Media are served by the backend from /explainer/ (scripts/dashboard/explainer,
+// bundled in the exe). Steps follow the talk: problem size, the standard
+// foundation-model pipeline, the decomposition, Stage A (shuffled training and
+// patch injection), Stage B (frozen UNI2-h on a few tiles) and the cost.
 // ============================================================
 const METHOD=(function(){
-  const NS="http://www.w3.org/2000/svg";
-  let STAGE_ID="methodStage";
-  const SV=()=>document.getElementById(STAGE_ID);
-  function E(t,a={}){const e=document.createElementNS(NS,t);
-    for(const k in a)e.setAttribute(k,a[k]);return e;}
-  function clr(){const s=SV();while(s&&s.firstChild)s.removeChild(s.firstChild);}
-  function T(x,y,s,o={}){const e=E("text",{x,y,fill:o.fill||"#e6edf3",
-    "font-size":o.size||15,"text-anchor":o.anchor||"start","font-weight":o.weight||400});
-    e.textContent=s;SV().appendChild(e);return e;}
-  const wait=ms=>new Promise(r=>setTimeout(r,ms));
-  let RUN=0;
-  const RISK=["#4575b4","#74add1","#abd9e9","#e0f3f8","#fee090","#fdae61","#f46d43","#d73027"];
-  const rc=v=>RISK[Math.min(RISK.length-1,Math.max(0,Math.round(v*(RISK.length-1))))];
-  function img(href,x,y,w,h,o={}){const e=E("image",{href,x,y,width:w,height:h});
-    if(o.op!=null)e.setAttribute("opacity",o.op);SV().appendChild(e);return e;}
-  function heat(x0,y0,w,h,grid,vf,alpha,delay){const [gr,gc]=grid,cw=w/gc,ch=h/gr;
-    for(let r=0;r<gr;r++)for(let c=0;c<gc;c++){
-      const e=E("rect",{x:x0+c*cw,y:y0+r*ch,width:cw,height:ch,fill:rc(vf(r,c)),
-        stroke:"#0b0e13","stroke-width":0.4,opacity:(delay!=null?0:(alpha==null?1:alpha))});
-      SV().appendChild(e);
-      if(delay!=null)e.animate([{opacity:0},{opacity:alpha==null?1:alpha}],
-        {duration:240,delay:(r*gc+c)*delay,fill:"forwards"});}
-  }
-
-  let DATA=null, err=null, loadPromise=null;
-  // clicking Next/Prev/a dot while the first-run fetch is still in flight used
-  // to call load() again; since the old "loading" boolean guard just returned
-  // immediately without waiting, render() re-entered itself in a tight loop
-  // (no real await ever happened) and pegged the CPU until the real fetch
-  // finished, which looked and felt like the whole app freezing. Concurrent
-  // callers now share and genuinely await the SAME in-flight promise instead.
-  function load(){
-    if(DATA)return Promise.resolve();
-    if(!loadPromise){
-      err=null;
-      loadPromise=API("methodology",{})
-        .then(d=>{DATA=d;})
-        .catch(e=>{err=e.message||String(e);})
-        .finally(()=>{loadPromise=null;});
-    }
-    return loadPromise;
-  }
-
-  // ---- STEP RENDERERS (take the data object; usable for cache OR live) ----
   const STEPS=[
-  {t:"The example: a real oligodendroglioma slide",
-   n:d=>`The <b>actual pipeline</b> runs on a real IDH-mutant, 1p/19q-codeleted oligodendroglioma (ResNet50/ResNet50, p95, occlusion). Every result matches <b>Run full pipeline</b>. Stage A grades the thumbnail: <b>${(d.stage_a&&d.stage_a.grade_pred||"").replace("_"," ")}</b> (confidence ${(d.stage_a&&d.stage_a.confidence||0).toFixed(2)}).`,
-   f:async(tok,d)=>{
-     T(500,64,"target slide · 4.0 µm/px thumbnail",{anchor:"middle",fill:"#8b949e",size:14});
-     img(d.target_thumb,350,90,340,340);
-     SV().appendChild(E("rect",{x:350,y:90,width:340,height:340,fill:"none",stroke:"#2a323d"}));
-     await wait(250);if(tok!==RUN)return;
-     const g=d.stage_a?d.stage_a.grade_pred:"";
-     const col={control:"#c9cba3",low_grade:"#ffe1a8",high_grade:"#e26d5c"}[g]||"#64748b";
-     const pill=E("g");pill.setAttribute("opacity","0");SV().appendChild(pill);
-     pill.appendChild(E("rect",{x:400,y:450,width:240,height:34,rx:17,fill:col}));
-     const pt=E("text",{x:520,y:472,"text-anchor":"middle","font-size":14,"font-weight":700,
-       fill:g==="high_grade"?"#fff":"#1d2733"});pt.textContent="Stage A: "+g.replace("_"," ");
-     pill.appendChild(pt);pill.animate([{opacity:0},{opacity:1}],{duration:400,fill:"forwards"});
-   }},
-  {t:"Patch-permutation & the permuted control",
-   n:d=>`Stage A is trained on <b>permuted</b> patches, so it judges tissue by content, not position. The control slide's tiles are <b>shuffled</b> (right) into a neutral reference. Because the model was trained this way, injecting a tile into a permuted control is not a strange or out of distribution test, it is exactly the kind of input the model already learned from.`,
-   f:async(tok,d)=>{
-     T(255,64,"control slide",{anchor:"middle",fill:"#8b949e",size:14});
-     img(d.control_orig,90,90,300,300);
-     T(745,64,"permuted control",{anchor:"middle",fill:"#8b949e",size:14});
-     T(500,250,"shuffle →",{anchor:"middle",fill:"#8b949e",size:14});
-     await wait(400);if(tok!==RUN)return;
-     const e=img(d.control_permuted,590,90,300,300,{op:0});
-     e.animate([{opacity:0},{opacity:1}],{duration:600,fill:"forwards"});
-     await wait(200);T(745,405,"neutral reference (layout destroyed)",{anchor:"middle",fill:"#6b7686",size:11});
-   }},
-  {t:"Patch injection: flip a control tile, watch the logit move",
-   n:d=>{const fr=d.injection&&d.injection.frames||[];const last=fr[fr.length-1];
-     return `We literally <b>replace one tile</b> of the permuted control with a target tile and re-run Stage A. Base logit ${d.injection?d.injection.base_logit:"n/a"}, and a high-signal tile pushes it up markedly, with a shift of up to <b>+${last?last.delta:"n/a"}</b>. That shift is the tile's signal score.`;},
-   f:async(tok,d)=>{
-     const inj=d.injection;if(!inj){T(500,300,"(injection data unavailable)",{anchor:"middle",fill:"#8b949e"});return;}
-     T(230,60,"permuted control (one slot flips)",{anchor:"middle",fill:"#8b949e",size:13});
-     const base=img(inj.permuted_img,70,80,300,300);
-     const [gr,gc]=d.grid,cw=300/gc,ch=300/gr;
-     const sr=inj.slot_row,sc=inj.slot_col;
-     const slotBox=E("rect",{x:70+sc*cw,y:80+sr*ch,width:cw,height:ch,fill:"none",
-       stroke:"#e11d1d","stroke-width":3});SV().appendChild(slotBox);
-     // logit gauge
-     T(700,60,"Stage A logit (target class)",{anchor:"middle",fill:"#e6edf3",size:14});
-     SV().appendChild(E("rect",{x:560,y:90,width:300,height:26,rx:5,fill:"#242b35"}));
-     const allLog=[inj.base_logit,...inj.frames.map(f=>f.logit)];
-     const lo=Math.min(...allLog),hi=Math.max(...allLog),rng=(hi-lo)||1;
-     const gx=v=>300*(v-lo)/rng;
-     const baseBar=E("rect",{x:560,y:90,width:gx(inj.base_logit),height:26,rx:5,fill:"#6b7686"});
-     SV().appendChild(baseBar);
-     const bar=E("rect",{x:560,y:90,width:gx(inj.base_logit),height:26,rx:5,fill:"#e26d5c"});
-     SV().appendChild(bar);
-     const lval=T(710,135,`base ${inj.base_logit}`,{anchor:"middle",fill:"#e6edf3",size:13});
-     // thumbnail with the source tiles marked
-     T(700,175,"target tiles being injected",{anchor:"middle",fill:"#8b949e",size:12});
-     img(d.target_thumb,600,190,200,200);
-     await wait(900);if(tok!==RUN)return;
-     for(let i=0;i<inj.frames.length;i++){if(tok!==RUN)return;
-       const fr=inj.frames[i];
-       // mark source tile on the mini thumbnail, pause so it's clear WHICH tile
-       // is about to be injected before anything changes
-       const tb=E("rect",{x:600+fr.col*(200/gc),y:190+fr.row*(200/gr),width:200/gc,height:200/gr,
-         fill:"none",stroke:"#e11d1d","stroke-width":2.5});SV().appendChild(tb);
-       await wait(700);if(tok!==RUN)return;
-       // swap the control image for the injected one
-       base.setAttribute("href",fr.injected_img);
-       // animate logit bar slowly, then hold on the result so it can be read
-       bar.animate([{width:bar.getAttribute("width")},{width:gx(fr.logit)}],{duration:900,fill:"forwards"});
-       bar.setAttribute("width",gx(fr.logit));
-       lval.textContent=`logit ${fr.logit}   (delta ${fr.delta>=0?"+":""}${fr.delta})`;
-       await wait(2200);
-       if(i<inj.frames.length-1){tb.setAttribute("opacity","0.3");}
-     }
-   }},
-  {t:"Every tile scored → Stage A signal map",
-   n:d=>`Repeating the injection for <b>all</b> tiles gives the real <b>signal map</b>: warm cells are the tissue driving the grade, localised with no pixel annotation.`,
-   f:async(tok,d)=>{
-     T(255,60,"target thumbnail",{anchor:"middle",fill:"#8b949e",size:13});
-     img(d.target_thumb,90,80,300,300);
-     T(745,60,"Stage A signal map",{anchor:"middle",fill:"#e6edf3",size:15,weight:600});
-     img(d.target_thumb,595,80,300,300);
-     heat(595,80,300,300,d.grid,(r,c)=>d.risk_grid[r][c],0.5,9);
-     await wait(d.grid[0]*d.grid[1]*9+200);if(tok!==RUN)return;
-     for(let i=0;i<RISK.length;i++)SV().appendChild(E("rect",{x:640+i*20,y:400,width:20,height:12,fill:RISK[i]}));
-     T(640,394,"low",{fill:"#8b949e",size:11});
-     T(640+RISK.length*20,394,"high",{fill:"#8b949e",size:11,anchor:"end"});
-   }},
-  {t:"p95 selection → high-resolution extraction",
-   n:d=>`Tiles above the <b>95th percentile</b> (${d.selected.length} here) are read back from the whole-slide image at <b>full level-0 resolution</b>. These are the real extracted patches.`,
-   f:async(tok,d)=>{
-     T(200,60,"signal map (p95 boxed)",{anchor:"middle",fill:"#e6edf3",size:14});
-     img(d.target_thumb,50,80,300,300);
-     heat(50,80,300,300,d.grid,(r,c)=>d.risk_grid[r][c],0.5,null);
-     const [gr,gc]=d.grid,cw=300/gc,ch=300/gr;
-     await wait(200);if(tok!==RUN)return;
-     const n=Math.min(d.patches.length,4);
-     for(let i=0;i<n;i++){if(tok!==RUN)return;const p=d.patches[i];
-       SV().appendChild(E("rect",{x:50+p.col*cw,y:80+p.row*ch,width:cw,height:ch,fill:"none",
-         stroke:"#e11d1d","stroke-width":3}));
-       const py=90+i*115;const g=E("g");g.setAttribute("opacity","0");SV().appendChild(g);
-       g.appendChild(E("image",{href:p.patch,x:650,y:py,width:96,height:96}));
-       g.appendChild(E("rect",{x:650,y:py,width:96,height:96,fill:"none",stroke:"#3b82f6","stroke-width":1.6}));
-       SV().appendChild(E("path",{d:`M${50+p.col*cw+cw},${80+p.row*ch+ch/2} C 470,${80+p.row*ch} 560,${py+48} 646,${py+48}`,
-         fill:"none",stroke:"#3b82f6","stroke-width":1.4,"stroke-dasharray":"5 4",opacity:.7}));
-       g.animate([{opacity:0},{opacity:1}],{duration:380,fill:"forwards"});await wait(300);}
-     T(698,80,"level-0 patches",{anchor:"middle",fill:"#e6edf3",size:13});
-   }},
-  {t:"Stage B → molecular subtype",
-   n:d=>`Each patch is classified and soft-voted into one call: <b>${(d.stage_b&&d.stage_b.subtype_pred||"").replace("IDH_","IDH-").replace("_"," ")}</b> (confidence ${(d.stage_b&&d.stage_b.confidence||0).toFixed(2)}). Real probabilities below.`,
-   f:async(tok,d)=>{
-     const n=Math.min(d.patches.length,4);
-     for(let i=0;i<n;i++){const py=95+i*92;
-       SV().appendChild(E("image",{href:d.patches[i].patch,x:55,y:py,width:80,height:80}));
-       SV().appendChild(E("rect",{x:55,y:py,width:80,height:80,fill:"none",stroke:"#3b82f6","stroke-width":1.4}));}
-     T(95,88,"patches",{anchor:"middle",fill:"#e6edf3",size:13});
-     SV().appendChild(E("rect",{x:250,y:220,width:150,height:120,rx:10,fill:"#1c232d",stroke:"#6366f1","stroke-width":1.6}));
-     T(325,278,"Stage B",{anchor:"middle",fill:"#fff",size:16,weight:700});
-     T(325,304,"ResNet50 · soft-vote",{anchor:"middle",fill:"#a9b2c0",size:11});
-     let defs=SV().querySelector("defs");if(!defs){defs=E("defs");SV().appendChild(defs);}
-     const mk=E("marker",{id:"mah",markerWidth:8,markerHeight:8,refX:6,refY:3,orient:"auto"});
-     mk.appendChild(E("path",{d:"M0,0 L6,3 L0,6 Z",fill:"#3b82f6"}));defs.appendChild(mk);
-     SV().appendChild(E("path",{d:"M140,280 L243,280",stroke:"#3b82f6","stroke-width":2,"marker-end":"url(#mah)"}));
-     SV().appendChild(E("path",{d:"M405,280 L510,280",stroke:"#6366f1","stroke-width":2}));
-     await wait(400);if(tok!==RUN)return;
-     const sp=d.stage_b||{};
-     // read probs robustly whether from cache (prob_IDH_*) or a live stage_b response
-     const P=k=>{const v=sp["prob_"+k];return (typeof v==="number")?v:0;};
-     const subs=[["IDH-mut (astro)",P("IDH_mt"),"#a8dadc"],
-       ["IDH-mut 1p/19q",P("IDH_mt_1p19q"),"#f1faee"],
-       ["IDH-wildtype",P("IDH_wt"),"#457b9d"]];
-     T(700,140,"molecular probabilities (soft vote)",{anchor:"middle",fill:"#e6edf3",size:14});
-     for(let i=0;i<subs.length;i++){const [nm,p,col]=subs[i];const yy=185+i*68;
-       T(530,yy-8,nm,{fill:"#e6edf3",size:12});
-       SV().appendChild(E("rect",{x:530,y:yy,width:300,height:30,rx:5,fill:"#242b35"}));
-       const bar=E("rect",{x:530,y:yy,width:0,height:30,rx:5,fill:col,stroke:"#c9ced6","stroke-width":.5});
-       SV().appendChild(bar);const pl=T(842,yy+21,p.toFixed(2),{fill:"#e6edf3",size:12});
-       if(tok!==RUN)return;
-       bar.animate([{width:0},{width:300*p}],{duration:700,delay:i*120,fill:"forwards"});
-       bar.setAttribute("width",300*p);}
-   }},
-  {t:"Occlusion map & integrated diagnosis",
-   n:d=>{const dx=(d.integrated&&(d.integrated.diagnosis||d.integrated.integrated_diagnosis))||"unknown";
-     return `Occlusion masks each sub-region of the driving patch (yellow = top cell). Grade + subtype give the WHO-2021 diagnosis: <b>${dx}</b>. Matches Run full pipeline.`;},
-   f:async(tok,d)=>{
-     const p=d.patches.find(x=>x.occl_grid)||d.patches[0];
-     T(190,60,"occlusion signal map",{anchor:"middle",fill:"#e6edf3",size:14});
-     SV().appendChild(E("image",{href:p.patch,x:50,y:80,width:280,height:280}));
-     if(p.occl_grid){const og=p.occl_grid,gr=og.length,gc=og[0].length,cw=280/gc;
-       for(let r=0;r<gr;r++)for(let c=0;c<gc;c++){
-         const e=E("rect",{x:50+c*cw,y:80+r*cw,width:cw,height:cw,fill:rc(og[r][c]),opacity:0});
-         SV().appendChild(e);if(tok!==RUN)return;
-         e.animate([{opacity:0},{opacity:.45}],{duration:260,delay:(r*gc+c)*6,fill:"forwards"});}
-       await wait(gr*gc*6+250);if(tok!==RUN)return;
-       if(p.occl_top){const [tr,tc]=p.occl_top.cell;
-         SV().appendChild(E("rect",{x:50+tc*cw,y:80+tr*cw,width:cw,height:cw,fill:"none",stroke:"#fde047","stroke-width":3}));}
-       if(p.occl_top&&p.occl_top.zoom){T(430,60,"top-cell level-0 zoom",{anchor:"middle",fill:"#8b949e",size:12});
-         const zg=E("g");zg.setAttribute("opacity","0");SV().appendChild(zg);
-         zg.appendChild(E("image",{href:p.occl_top.zoom,x:355,y:80,width:150,height:150}));
-         zg.appendChild(E("rect",{x:355,y:80,width:150,height:150,fill:"none",stroke:"#fde047","stroke-width":2}));
-         zg.animate([{opacity:0},{opacity:1}],{duration:500,fill:"forwards"});}}
-     const card=E("g");card.setAttribute("opacity","0");SV().appendChild(card);
-     card.appendChild(E("rect",{x:540,y:150,width:410,height:150,rx:14,fill:"#132029",stroke:"#457b9d","stroke-width":1.6}));
-     const t1=E("text",{x:745,y:195,fill:"#8fb4c9","font-size":13,"text-anchor":"middle"});
-     t1.textContent="Integrated diagnosis";card.appendChild(t1);
-     const dx=(d.integrated&&(d.integrated.diagnosis||d.integrated.integrated_diagnosis))||"unknown";
-     const t2=E("text",{x:745,y:233,fill:"#fff","font-size":15,"font-weight":700,"text-anchor":"middle"});
-     t2.textContent=dx.length>38?dx.slice(0,37)+"…":dx;card.appendChild(t2);
-     const conf=(d.integrated&&(d.integrated.confidence||d.integrated.integrated_confidence))||0;
-     const t3=E("text",{x:745,y:268,fill:"#e6edf3","font-size":13,"text-anchor":"middle"});
-     t3.textContent="RN50 / RN50 · p95 · confidence "+conf.toFixed(2);card.appendChild(t3);
-     card.animate([{opacity:0},{opacity:1}],{duration:500,fill:"forwards"});
-   }},
-  {t:"Overview: the whole pipeline in one view",
-   n:d=>{const dx=(d.integrated&&(d.integrated.diagnosis||d.integrated.integrated_diagnosis))||"unknown";
-     return `From thumbnail to diagnosis in one glance. Stage A grades the whole slide, the p95 tiles feed Stage B, and the two combine into <b>${dx}</b>. Nothing here is recomputed, it is the same real result shown step by step above.`;},
-   f:async(tok,d)=>{
-     // 1. thumbnail (top-left)
-     T(105,55,"thumbnail",{anchor:"middle",fill:"#8b949e",size:12});
-     img(d.target_thumb,20,65,170,170);
-     SV().appendChild(E("rect",{x:20,y:65,width:170,height:170,fill:"none",stroke:"#2a323d"}));
-     let defs=SV().querySelector("defs");if(!defs){defs=E("defs");SV().appendChild(defs);}
-     const mk=E("marker",{id:"ovah",markerWidth:8,markerHeight:8,refX:6,refY:3,orient:"auto"});
-     mk.appendChild(E("path",{d:"M0,0 L6,3 L0,6 Z",fill:"#3b82f6"}));defs.appendChild(mk);
-     await wait(250);if(tok!==RUN)return;
-     // 2. Stage A grade pill
-     SV().appendChild(E("path",{d:"M195,150 L245,150",stroke:"#3b82f6","stroke-width":2,"marker-end":"url(#ovah)"}));
-     const sa=d.stage_a||{};const g=sa.grade_pred||"";
-     const gcol={control:"#c9cba3",low_grade:"#ffe1a8",high_grade:"#e26d5c"}[g]||"#64748b";
-     T(320,55,"Stage A",{anchor:"middle",fill:"#8b949e",size:12});
-     SV().appendChild(E("rect",{x:260,y:130,width:120,height:40,rx:20,fill:gcol}));
-     T(320,155,g.replace("_"," "),{anchor:"middle",fill:g==="high_grade"?"#fff":"#1d2733",size:12,weight:700});
-     await wait(300);if(tok!==RUN)return;
-     // 3. p95 thumbs (centered on the same row as thumbnail/Stage A, y=150)
-     SV().appendChild(E("path",{d:"M385,150 L440,150",stroke:"#3b82f6","stroke-width":2,"marker-end":"url(#ovah)"}));
-     T(500,55,`p95 patches (${d.selected.length})`,{anchor:"middle",fill:"#8b949e",size:12});
-     const n=Math.min(d.patches.length,4);
-     const pSize=55,pY=150-pSize/2;   // 150 = row center, matching thumb/Stage A
-     for(let i=0;i<n;i++){
-       img(d.patches[i].patch,450+i*65,pY,pSize,pSize);
-       SV().appendChild(E("rect",{x:450+i*65,y:pY,width:pSize,height:pSize,fill:"none",stroke:"#3b82f6","stroke-width":1.2}));}
-     await wait(300);if(tok!==RUN)return;
-     // 4. Stage B probs (compact), same row center (150) as everything else
-     SV().appendChild(E("path",{d:"M710,150 L760,150",stroke:"#6366f1","stroke-width":2,"marker-end":"url(#ovah)"}));
-     T(840,55,"Stage B",{anchor:"middle",fill:"#8b949e",size:12});
-     const sb=d.stage_b||{};
-     const subs=[["mt",sb.prob_IDH_mt||0,"#a8dadc"],["1p19q",sb.prob_IDH_mt_1p19q||0,"#f1faee"],
-       ["wt",sb.prob_IDH_wt||0,"#457b9d"]];
-     const rowH=16,rowGap=22,groupH=rowGap*2+rowH;   // 3 rows, 2 gaps between them
-     const yBase=150-groupH/2;                        // center the whole group on row 150
-     for(let i=0;i<3;i++){const [nm,p,col]=subs[i];const yy=yBase+i*rowGap;
-       T(772,yy+9,nm,{fill:"#8b949e",size:9});
-       SV().appendChild(E("rect",{x:800,y:yy,width:90,height:rowH,rx:3,fill:"#242b35"}));
-       const bar=E("rect",{x:800,y:yy,width:0,height:rowH,rx:3,fill:col});SV().appendChild(bar);
-       // set the final width directly (not just via .animate()) so the bar is
-       // guaranteed to show the real value even if the WAAPI animation doesn't
-       // get a chance to commit before the next paint - this is the same bug
-       // that caused empty bars in the main Stage B step earlier.
-       bar.animate([{width:0},{width:90*p}],{duration:500,fill:"forwards"});
-       bar.setAttribute("width",90*p);}
-     await wait(500);if(tok!==RUN)return;
-     // 5. integrated diagnosis (bottom banner, full width)
-     const card=E("g");card.setAttribute("opacity","0");SV().appendChild(card);
-     card.appendChild(E("rect",{x:20,y:340,width:960,height:130,rx:14,fill:"#132029",stroke:"#457b9d","stroke-width":1.6}));
-     T(500,375,"Integrated diagnosis",{anchor:"middle",fill:"#8fb4c9",size:13});
-     const dx=(d.integrated&&(d.integrated.diagnosis||d.integrated.integrated_diagnosis))||"unknown";
-     const t2=E("text",{x:500,y:415,fill:"#fff","font-size":19,"font-weight":700,"text-anchor":"middle"});
-     t2.textContent=dx;card.appendChild(t2);
-     const conf=(d.integrated&&(d.integrated.confidence||d.integrated.integrated_confidence))||0;
-     T(500,448,"RN50 / RN50 · p95 · confidence "+conf.toFixed(2),{anchor:"middle",fill:"#e6edf3",size:13});
-     card.animate([{opacity:0},{opacity:1}],{duration:600,fill:"forwards"});
-   }},
+    {t:"How big is a whole-slide image?", m:"anim1.mp4", p:[
+      "A whole-slide image is enormous. The example slide used throughout these steps, an IDH-mutant astrocytoma from the EBRAINS cohort, is 73,728 × 93,184 pixels (6.9 gigapixels) and takes 2.13 GB on disk, even after compression.",
+      "That is as much storage as roughly 90 complete brain MRI exams (median 23.6 MB per exam in the Erasmus Glioma Database). Analysing every pixel at full resolution is what makes slide-level AI expensive."]},
+    {t:"The standard foundation-model pipeline", m:"anim2.mp4", p:[
+      "The current state of the art (TRIDENT + UNI2-h + CLAM) segments the tissue, cuts it into 256-pixel tiles at 20× and passes <b>every</b> tile through the frozen UNI2-h foundation model (ViT-H/14, 681 million parameters).",
+      "CLAM attention pooling then turns the tile features into one diagnosis. It works very well, but it is computationally heavy: every tile of every slide passes through the foundation model."]},
+    {t:"Match compute to the question", m:"overview.png", p:[
+      "The integrated WHO 2021 diagnosis consists of subproblems of different difficulty. <b>Grade</b> (architecture, cellularity, necrosis, vascular proliferation) is visible at low resolution on the whole slide: a small CNN on a 2048-pixel thumbnail is enough.",
+      "<b>Molecular type</b> (IDH, 1p/19q) leaves subtle cellular traces: it needs high resolution, but not everywhere. A frozen foundation model therefore encodes only a small sample of high-resolution tiles.",
+      "This decomposition is where the efficiency gain comes from. Patch injection in stage A additionally localises the tissue that drives the prediction."]},
+    {t:"Finding a meaningful signal", m:"anim3.mp4", p:[
+      "Which regions drive the grade prediction? A natural idea is to paste a block of tumour into a healthy slide and watch the network respond.",
+      "The network does react, but the pasted block creates seams, a different stain and an impossible tissue layout, so the model may respond to the artefact rather than to the biology."]},
+    {t:"Stage A: training on shuffled mosaics", m:"anim4.mp4", p:[
+      "During training, every 2048 × 2048 thumbnail is cut into an 8 × 8 grid of 256-pixel tiles that are randomly permuted, with a new permutation every iteration. A ResNet-50 learns control, low grade or high grade from this mosaic.",
+      "Position carries no information, so the network relies on tile content, and a mosaic is its normal input: there is no seam to detect when a single tile is replaced later."]},
+    {t:"Stage A: patch injection", m:"anim5.mp4", p:[
+      "A healthy control slide is shuffled once (fixed seed). Each of the 64 tiles of the tumour thumbnail in turn replaces the control tile at the <b>same position</b>, and the rise of the logit of the predicted grade is recorded.",
+      "Repeating this for all 64 tiles gives an 8 × 8 signal map. Cells at or above the 95th percentile with at least 25% tissue (at most four) are mapped exactly onto the whole-slide image; these regions localise the evidence for the grade and are where stage B samples its tiles."]},
+    {t:"Stage B: frozen UNI2-h on 64 tiles", m:"stage_b.png", p:[
+      "From all 20× tissue tiles inside the selected regions, 64 are drawn at random and encoded by the frozen UNI2-h. The 64 embeddings are averaged into one vector, and a logistic-regression head (4,611 trained parameters) predicts molecular type: IDH-mutant 1p/19q-codeleted, IDH-mutant non-codeleted or IDH-wildtype.",
+      "Together with the grade from stage A this gives the integrated diagnosis. In the dashboard the number of tiles can be set from 8 to 1,024 (default 64)."]},
+    {t:"Where stage B looks", m:"stage_b_evidence.png", p:[
+      "Because the head is linear, every sampled tile has an exact contribution to the predicted molecular type: the slide-level score is the mean of the tile scores.",
+      "Shown for two correctly classified test slides: the selected regions, the 64 sampled tiles coloured by their contribution, the most influential tiles and the slide-level probabilities. The <b>Stage B evidence map</b> in the dashboard shows the same for your slide."]},
   ];
-
-  let cur=0, playing=false, playTimer=null;
-  function spinner(msg,sub){clr();
-    T(500,290,msg,{anchor:"middle",fill:"#e6edf3",size:15});
-    if(sub){
-      // wrap the sub-text so it doesn't overflow the SVG width
-      const words=sub.split(" ");const lines=[];let line="";
-      for(const w of words){if((line+" "+w).length>62){lines.push(line);line=w;}
-        else line=line?line+" "+w:w;}
-      if(line)lines.push(line);
-      lines.forEach((ln,i)=>T(500,320+i*20,ln,{anchor:"middle",fill:"#8b949e",size:12}));
+  let cur=0, playing=false, timer=null;
+  const V=()=>document.getElementById("mVideo"), I=()=>document.getElementById("mImage");
+  function render(){
+    clearTimeout(timer);
+    const s=STEPS[cur], v=V(), im=I();
+    v.pause(); v.onended=null; v.style.display="none"; im.style.display="none";
+    document.getElementById("mStepNo").textContent=`Step ${cur+1} of ${STEPS.length}`;
+    document.getElementById("mTitle").textContent=s.t;
+    document.getElementById("methodNarr").innerHTML=s.p.map(x=>`<p style="margin:0 0 10px">${x}</p>`).join("");
+    if(s.m.endsWith(".mp4")){
+      v.src="/explainer/"+s.m; v.style.display="block"; v.currentTime=0;
+      v.play().catch(()=>{});
+      v.onended=()=>{if(playing)timer=setTimeout(next,1500);};
+    }else{
+      im.src="/explainer/"+s.m; im.style.display="block";
+      if(playing)timer=setTimeout(next,14000);
     }
-    const sp=E("circle",{cx:500,cy:250,r:14,fill:"none",stroke:"#5aa0c7","stroke-width":3,
-      "stroke-dasharray":"66","stroke-linecap":"round"});
-    const an=E("animateTransform",{attributeName:"transform",type:"rotate",
-      from:"0 500 250",to:"360 500 250",dur:"1s",repeatCount:"indefinite"});
-    sp.appendChild(an);SV().appendChild(sp);}
-
-  async function render(){
-    RUN++;const tok=RUN;STAGE_ID="methodStage";
-    if(err){clr();T(500,290,"Could not build the example:",{anchor:"middle",fill:"#f28b82",size:15});
-      T(500,320,err,{anchor:"middle",fill:"#8b949e",size:12});return;}
-    if(!DATA){spinner("Building the example — first run only…",
-      "runs the real RN50/RN50 pipeline + occlusion once (can take ~30–60 s), then caches to disk; later opens are instant");
-      lockUI();await load();unlockUI();if(tok!==RUN)return;return render();}
-    const step=STEPS[cur];clr();
-    T(30,36,`Step ${cur+1} · ${step.t}`,{fill:"#5aa0c7",size:17,weight:700});
-    document.getElementById("methodNarr").innerHTML=step.n(DATA);
-    document.getElementById("mStepLbl").textContent=`${cur+1} / ${STEPS.length}`;
-    dots();
-    try{await step.f(tok,DATA);}catch(e){}
-    if(playing&&tok===RUN){playTimer=setTimeout(()=>{if(cur<STEPS.length-1){cur++;render();}
-      else{playing=false;playBtn();}},2000);}
+    dots(); playBtn();
   }
+  function next(){if(cur<STEPS.length-1){cur++;render();}else{playing=false;playBtn();}}
   function dots(){const d=document.getElementById("mDots");d.innerHTML="";
-    STEPS.forEach((_,i)=>{const b=document.createElement("div");
+    STEPS.forEach((_,i)=>{const b=document.createElement("div");b.title=STEPS[i].t;
       b.style.cssText=`width:9px;height:9px;border-radius:50%;cursor:pointer;`+
         `background:${i===cur?"var(--accent)":"#39424d"}`;
       b.onclick=()=>{cur=i;stop();render();};d.appendChild(b);});}
-  function playBtn(){document.getElementById("mPlay").textContent=playing?"⏸ Pause":"▶ Play";}
-  function stop(){playing=false;clearTimeout(playTimer);playBtn();}
-
-  function open(){cur=0;document.getElementById("methodModal").classList.remove("hidden");
-    render();}   // render() itself calls load(); calling load() separately here too
-                 // raced with it (the second call returned instantly under the
-                 // "already loading" guard), causing render() to recurse into
-                 // itself in a tight loop that never actually waited for data -
-                 // pegging the CPU with nothing ever painted.
-  function close(){stop();RUN++;document.getElementById("methodModal").classList.add("hidden");}
-  window.openMethod=open;     // used by the header button and inline handlers
-  window.closeMethod=close;   // the modal's ✕ Close button calls this inline
-
+  function playBtn(){document.getElementById("mPlay").textContent=playing?"⏸ Pause":"▶ Play all";}
+  function stop(){playing=false;clearTimeout(timer);playBtn();}
+  function open(){cur=0;playing=false;document.getElementById("methodModal").classList.remove("hidden");render();}
+  function close(){stop();V().pause();document.getElementById("methodModal").classList.add("hidden");}
+  window.openMethod=open; window.closeMethod=close;
   document.getElementById("btnMethod").onclick=open;
   document.getElementById("mPrev").onclick=()=>{stop();if(cur>0){cur--;render();}};
   document.getElementById("mNext").onclick=()=>{stop();if(cur<STEPS.length-1){cur++;render();}};
-  document.getElementById("mPlay").onclick=()=>{playing=!playing;playBtn();
-    if(playing){if(cur===STEPS.length-1)cur=0;render();}else clearTimeout(playTimer);};
+  document.getElementById("mPlay").onclick=()=>{playing=!playing;
+    if(playing){render();}else{clearTimeout(timer);playBtn();}};
   document.addEventListener("keydown",e=>{
     if(document.getElementById("methodModal").classList.contains("hidden"))return;
     if(e.key==="Escape")close();
     else if(e.key==="ArrowRight"){stop();if(cur<STEPS.length-1){cur++;render();}}
     else if(e.key==="ArrowLeft"){stop();if(cur>0){cur--;render();}}});
-
-  // expose the step renderers so a live Run full pipeline can narrate into the
-  // main canvas using the same visuals (see runPipeline live-mode).
-  return {STEPS, open, close,
-    renderStepInto:async function(stageId,stepIdx,data,tokRef){
-      const prev=STAGE_ID;STAGE_ID=stageId;RUN++;const tok=RUN;
-      try{await STEPS[stepIdx].f(tok,data);}catch(e){}
-      STAGE_ID=prev;}};
+  return {STEPS, open, close};
 })();
 
 </script>

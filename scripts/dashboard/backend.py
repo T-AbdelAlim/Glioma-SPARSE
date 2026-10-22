@@ -56,6 +56,7 @@ from glioma_sparse.interpret.patch_injection import (
 from glioma_sparse.interpret.wsi_mapping import (
     load_mapping, thumbnail_bbox_to_wsi, grid_cell_bbox,
 )
+from glioma_sparse.models import resuni
 import openslide
 
 
@@ -76,6 +77,12 @@ REPO_ROOT = Path(os.environ.get("GLIOMA_SPARSE_ROOT") or (
     Path(sys.executable).resolve().parents[2] if getattr(sys, "frozen", False)
     else Path(__file__).resolve().parents[2]))
 
+# resuni.py resolves its own REPO_ROOT from __file__, which is wrong once frozen (PyInstaller
+# extracts src/glioma_sparse/models/resuni.py somewhere under _MEIPASS, not the real repo/exe
+# tree) -- point it at the REPO_ROOT just computed above, which already handles both cases.
+resuni.REPO_ROOT = REPO_ROOT
+resuni.HEADS_DIR = REPO_ROOT / "data" / "resuni_heads"
+
 # checkpoints are resolved dynamically (see resolve_best_checkpoint): for a
 # given arch+metric, every fold under the relevant training_output* dir is
 # compared on that metric's val score and the winner's best_<metric>.pth is
@@ -91,13 +98,6 @@ METRIC_COLUMN = {"f1": "macro_f1", "auc": "macro_auc", "acc": "accuracy"}
 DEFAULT_METRIC = "f1"
 CONTROL_IMAGE = str(REPO_ROOT / "data" / "included" / "control" / "86242943-7775-11eb-827d-001a7dda7111.jpg")
 
-# preset example slide for the "Methodology explained" walkthrough: a real
-# oligodendroglioma, run through the actual pipeline (RN50/RN50, p95, occlusion
-# on). Only read when methodology_cache/ is missing; GLIOMA_SPARSE_METHOD_SLIDE
-# points it at the slide on another machine.
-METHODOLOGY_TARGET = os.environ.get(
-    "GLIOMA_SPARSE_METHOD_SLIDE",
-    r"C:\Users\TAbde\Documents\EMC_postdoc\Virtual_Biopsy\data\WSI_ebrains\WHO2021_data\oligo_IDHmt_1p19qdel_G3\oligo_IDHmt_1p19qdel_G3\a198054a-357f-11eb-bac3-001a7dda7111.ndpi")
 LOGO_PATH = str(REPO_ROOT / "docs" / "logo.png")
 
 GRADE_CLASSES = ["control", "low_grade", "high_grade"]
@@ -327,8 +327,9 @@ class ExtractReq(BaseModel):
 
 class StageBReq(BaseModel):
     session_id: str
-    arch: str = "resnet50"
+    arch: str = "resuni"
     metric: str = DEFAULT_METRIC
+    n_tiles: int = 64          # UNI2-h tiles per slide (a head trained with this n must exist)
 
 class OcclReq(BaseModel):
     session_id: str
@@ -385,6 +386,15 @@ def config():
             f"{s}:{a}:{m}": _checkpoint_available(s, a, m)
             for s in ("stage_a", "stage_b") for a in ARCH_OUTPUT_DIRS for m in METRIC_COLUMN
         },
+        # ResUNI (Stage A regions + UNI2-h + a tiny per-fold logistic head) is an alternative
+        # to the ResNet Stage B classifier. It needs a local UNI2-h checkpoint (gated model,
+        # not redistributed with this repo -- see README) plus the trained head for the
+        # chosen Stage-A arch/metric; the frontend hides the option when either is missing.
+        "resuni_available": resuni.uni2h_available(),
+        "resuni_configs": resuni.resuni_available_configs(),
+        "resuni_tile_options": {f"{a}:{m}": (resuni.tile_options(cfg) if cfg else [])
+                                for (a, m) in resuni.CONFIG_FOR_STAGE_A
+                                for cfg in [resuni.resuni_config_available(a, m)]},
     }
 
 
@@ -713,9 +723,142 @@ def api_extract(req: ExtractReq):
 
 
 # ---- 5. STAGE B: subtype per patch + soft vote ----
+def _selected_bboxes(mapping, selected):
+    """Level-0 (x, y, w, h) of every selected Stage-A region, recomputed from the grid
+    cell + mapping (works even if a region's 2048 patch was never /api/extract-ed)."""
+    out = []
+    for sel in selected:
+        bbox_thumb = grid_cell_bbox(sel["row"], sel["col"], GRID[0], GRID[1], mapping.thumbnail_size)
+        wsi_bbox = thumbnail_bbox_to_wsi(mapping, bbox_thumb)
+        if wsi_bbox is not None:
+            out.append(wsi_bbox)
+    return out
+
+
+def _run_resuni(s, archA, metricA, n_tiles=64):
+    """ResUNI slide-level prediction: samples UNI2-h tiles from every selected Stage-A
+    region and applies the 5-fold-ensembled head for (archA, metricA). Returns a dict
+    shaped like the ResNet Stage B result plus the raw tile/contribution data (kept in
+    the session for the ResUNI evidence view)."""
+    config = resuni.resuni_config_available(archA, metricA)
+    if config is None:
+        raise HTTPException(400, f"no ResUNI head for Stage A = {archA}/{metricA} "
+                                 "(supported: resnet18/f1, resnet50/f1, resnet50/auc)")
+    if not resuni.uni2h_available():
+        raise HTTPException(400, "UNI2-h checkpoint not found; set GLIOMA_SPARSE_UNI2H_CKPT "
+                                 "(see README) to enable ResUNI")
+    if not resuni.heads_available(config, n_tiles):
+        raise HTTPException(400, f"no UNI2-h head trained with {n_tiles} tiles for Stage A = {archA}/{metricA} "
+                                 f"(available: {resuni.tile_options(config)})")
+    bboxes = _selected_bboxes(s["mapping"], s.get("selected", []))
+    if not bboxes:
+        raise HTTPException(400, "no selected regions; run the risk map step first")
+    slide = openslide.OpenSlide(s["mapping"].wsi_path)
+    try:
+        tiles, n_tissue = resuni.sample_region_tiles(slide, s["mapping"].base_mpp, bboxes, n=n_tiles)
+    finally:
+        slide.close()
+    if not tiles:
+        raise HTTPException(400, "no tissue tiles found inside the selected regions")
+    feats = resuni.embed_tiles(tiles, DEVICE)
+    out = resuni.predict_from_features(feats, config, n_tiles)
+    s["resuni"] = _resuni_state(config, tiles, out, _region_bboxes(s))
+    s["tile_evidence"] = {}          # evidence depends on this exact draw; recompute on demand
+    return out["ens_probs"], out["pred_idx"], config, len(tiles), n_tissue
+
+
+def _region_bboxes(s):
+    """{(row, col): level-0 bbox} of every selected Stage-A region."""
+    out = {}
+    for sel in s.get("selected", []):
+        key = (sel["row"], sel["col"])
+        bb = s.get("patch_bbox", {}).get(key)
+        if bb is None:
+            bb = next(iter(_selected_bboxes(s["mapping"], [sel])), None)
+        if bb is not None:
+            out[key] = tuple(int(v) for v in bb)
+    return out
+
+
+def _resuni_state(config, tiles, out, regions):
+    """Everything the evidence view needs, taken from the tiles that made the prediction."""
+    region_of = []
+    for (tx, ty, tw, th), _img in tiles:
+        cx, cy = tx + tw / 2, ty + th / 2
+        region_of.append(next((k for k, (bx, by, bw, bh) in regions.items()
+                               if bx <= cx < bx + bw and by <= cy < by + bh), None))
+    return {"config": config, "pred_idx": out["pred_idx"], "regions": regions,
+            "tiles": [t[0] for t in tiles], "images": [t[1] for t in tiles], "region_of": region_of,
+            "contributions": np.asarray(out["contributions"], np.float32),
+            "slide_mean": out["slide_mean_contribution"], "margin_bias": out["margin_bias"]}
+
+
+def _tile_evidence(s, row, col):
+    """Stage-B evidence for one region, from the n=64 tiles that made the slide-level UNI2-h
+    prediction (no re-sampling, no extra encoding). Each tile's value is its exact share of the
+    slide-level margin of the predicted class (resuni.margin_contributions); colours are the
+    tile's rank among ALL sampled tiles, so regions are comparable. Returns (payload, top tile)."""
+    R = s["resuni"]
+    bb = R["regions"].get((row, col))
+    if bb is None:
+        raise HTTPException(400, "this tile is not one of the selected regions")
+    bx, by, bw, bh = bb
+    c = R["contributions"]; n = len(c)
+    order = np.argsort(np.argsort(c))
+    rank = (order + 0.5) / n
+    items, top = [], None
+    for i, key in enumerate(R["region_of"]):
+        if key != (row, col):
+            continue
+        tx, ty, tw, th = R["tiles"][i]
+        x0, y0 = max(0.0, (tx - bx) / bw), max(0.0, (ty - by) / bh)
+        x1, y1 = min(1.0, (tx + tw - bx) / bw), min(1.0, (ty + th - by) / bh)
+        items.append({"x": round(x0, 4), "y": round(y0, 4), "w": round(x1 - x0, 4), "h": round(y1 - y0, 4),
+                      "v": round(float(c[i]), 3), "rank": round(float(rank[i]), 3)})
+        if top is None or c[i] > c[top]:
+            top = i
+    region_vals = [it["v"] for it in items]
+    payload = {
+        "kind": "tiles", "grid": list(GRID), "importance_grid": None,
+        "pred": SUBTYPE_CLASSES[R["pred_idx"]],
+        "tiles": items, "n_in_region": len(items), "n_total": n,
+        "region_mean": round(float(np.mean(region_vals)), 3) if region_vals else None,
+        "slide_mean": round(float(R["slide_mean"]), 3),
+        "top_tile": (dict(items[[i for i, k in enumerate(R["region_of"]) if k == (row, col)].index(top)],
+                          rank_among_all=int(n - order[top])) if top is not None else None),
+    }
+    top_img = R["images"][top] if top is not None else None
+    s.setdefault("tile_evidence", {})[(row, col)] = {"payload": payload, "top_img": top_img}
+    return payload, top_img
+
+
 @app.post("/api/stage_b")
 def api_stage_b(req: StageBReq):
     s = sess(req.session_id)
+    if req.arch == "resuni":
+        if "stage_a" not in s:
+            raise HTTPException(400, "run stage_a first")
+        slide_probs, pred_idx, config, n_tiles, n_tissue = _run_resuni(
+            s, s["stage_a"]["arch"], s["stage_a"]["metric"], req.n_tiles)
+        fold_name, val_value = f"UNI2-h ({config}, {req.n_tiles} tiles, 5-fold ensemble)", None
+        s["stage_b"] = {"arch": "resuni", "metric": config, "slide_probs": slide_probs, "pred_idx": pred_idx}
+        s["results"]["stage_b"] = {
+            "arch": "resuni", "metric": config, "checkpoint_fold": fold_name,
+            "subtype_pred": SUBTYPE_CLASSES[pred_idx],
+            "prob_IDH_mt": round(float(slide_probs[0]), 2),
+            "prob_IDH_mt_1p19q": round(float(slide_probs[1]), 2),
+            "prob_IDH_wt": round(float(slide_probs[2]), 2),
+            "confidence": entropy_conf(slide_probs),
+            "n_patches": n_tiles, "n_tiles": req.n_tiles,
+        }
+        return {
+            "per_patch": [],
+            "slide_probs": {SUBTYPE_CLASSES[i]: round(float(slide_probs[i]), 2) for i in range(3)},
+            "subtype_pred": SUBTYPE_CLASSES[pred_idx],
+            "confidence": entropy_conf(slide_probs),
+            "arch": "resuni", "metric": config, "checkpoint_fold": fold_name, "val_score": val_value,
+            "n_tiles": n_tiles, "n_tissue_tiles_found": n_tissue,
+        }
     if not s["patches"]:
         raise HTTPException(400, "extract at least one patch first")
     model = get_model("stage_b", req.arch, req.metric)
@@ -757,10 +900,15 @@ def api_stage_b(req: StageBReq):
     }
 
 
-# ---- 5b. STAGE B occlusion map (optional, off by default) ----
+# ---- 5b. STAGE B occlusion (ResNet) / tile evidence (UNI2-h) (optional, off by default) ----
 @app.post("/api/stage_b_occlusion")
 def api_occlusion(req: OcclReq):
     s = sess(req.session_id)
+    if req.arch == "resuni":
+        if "resuni" not in s:
+            raise HTTPException(400, "run stage_b (UNI2-h) first")
+        payload, top_img = _tile_evidence(s, req.row, req.col)
+        return {**payload, "top_zoom": b64(top_img.resize((512, 512), Image.BICUBIC)) if top_img is not None else None}
     patch = s["patches"].get((req.row, req.col))
     if patch is None:
         raise HTTPException(400, "extract that patch first")
@@ -838,7 +986,7 @@ def api_integrate(req: StageBReq):
 def api_save(req: SaveReq):
     s = sess(req.session_id)
     saved = _save_session_folder(s, Path(s["gs_dir"]))
-    xlsx = next((p for p in saved if p.endswith("_report.xlsx")), None)
+    xlsx = next((p for p in saved if p.endswith("report.xlsx")), None)
     return {"saved": saved, "report": xlsx}
 
 
@@ -908,6 +1056,27 @@ def _save_session_folder(s, gs, save_patches=True):
 
     sel_rank = {(sel["row"], sel["col"]): i + 1
                 for i, sel in enumerate(s.get("selected", []))}
+    for (r, c), ev in s.get("tile_evidence", {}).items():
+        patch = s["patches"].get((r, c))
+        if patch is not None:
+            from PIL import ImageDraw
+            img = patch.resize((2048, 2048), Image.BICUBIC).convert("RGB")
+            over = Image.new("RGBA", img.size, (0, 0, 0, 0)); d = ImageDraw.Draw(over)
+            cmap = plt.get_cmap("RdYlBu_r"); top = ev["payload"]["top_tile"]
+            for t in ev["payload"]["tiles"]:
+                col = tuple(int(255 * q) for q in cmap(t["rank"])[:3])
+                box = [t["x"] * 2048, t["y"] * 2048, (t["x"] + t["w"]) * 2048, (t["y"] + t["h"]) * 2048]
+                d.rectangle(box, fill=col + (110,), outline=col + (255,), width=6)
+            if top:
+                d.rectangle([top["x"] * 2048, top["y"] * 2048, (top["x"] + top["w"]) * 2048,
+                             (top["y"] + top["h"]) * 2048], outline=(253, 224, 71, 255), width=12)
+            Image.alpha_composite(img.convert("RGBA"), over).convert("RGB").save(
+                fig_dir / f"stageB_tiles_r{r}c{c}.jpg", quality=90)
+            saved.append(str(fig_dir / f"stageB_tiles_r{r}c{c}.jpg"))
+        if ev["top_img"] is not None:
+            name = f"stageB_rank{sel_rank.get((r, c), 0):02d}_r{r}c{c}_toptile.jpg"
+            ev["top_img"].resize((1024, 1024), Image.BICUBIC).save(fig_dir / name, quality=92)
+            saved.append(str(fig_dir / name))
     for (r, c), info in s.get("occl_top", {}).items():
         rank = sel_rank.get((r, c), 0)
         sr, sc = info["cell"]
@@ -932,7 +1101,7 @@ def _save_session_folder(s, gs, save_patches=True):
     patch_records = []
     sel_rank = {(x["row"], x["col"]): i + 1
                 for i, x in enumerate(s.get("selected", []))}
-    has_occl = bool(s.get("occlusion"))
+    has_occl = bool(s.get("occlusion")) or bool(s.get("tile_evidence"))
     for (r, c), patch in s["patches"].items():
         sel = next((x for x in s.get("selected", []) if x["row"] == r and x["col"] == c), {})
         bbox = s.get("patch_bbox", {}).get((r, c))
@@ -947,7 +1116,10 @@ def _save_session_folder(s, gs, save_patches=True):
             rank = sel_rank.get((r, c), 0)
             sr, sc = occ_top["cell"]
             zoom_file = f"stageB_rank{rank:02d}_r{r}c{c}_top1_r{sr}c{sc}_zoom.jpg"
+        ev = s.get("tile_evidence", {}).get((r, c))
         patch_records.append({
+            "tile_evidence": ({**ev["payload"], "zoom_file": (f"stageB_rank{sel_rank.get((r, c), 0):02d}_r{r}c{c}_toptile.jpg"
+                                                             if ev["top_img"] is not None else None)} if ev else None),
             "row": r, "col": c,
             "risk": sel.get("risk"), "tissue": sel.get("tissue"),
             "wsi_bbox": list(bbox) if bbox else None,
@@ -1042,6 +1214,9 @@ def api_load(req: LoadReq):
         ot = pr.get("occl_top")
         if ot and ot.get("zoom_file"):
             rec["top_zoom"] = load_jpg_b64(fig / ot["zoom_file"])
+        te = pr.get("tile_evidence")
+        if te and te.get("zoom_file"):
+            rec["top_zoom"] = load_jpg_b64(fig / te["zoom_file"])
         patches.append(rec)
 
     return {
@@ -1078,7 +1253,8 @@ class BatchReq(BaseModel):
     input_folder: str
     output_location: str
     archA: str = "resnet50"
-    archB: str = "resnet50"
+    archB: str = "resuni"
+    n_tiles: int = 64
     metricA: str = DEFAULT_METRIC
     metricB: str = DEFAULT_METRIC
     percentile: float = 95.0
@@ -1090,7 +1266,7 @@ class BatchReq(BaseModel):
 
 def _process_slide_headless(slide_path, archA, archB, percentile, occlusion,
                              on_thumbnail=None, on_riskmap=None, stain_profile=None,
-                             metricA=DEFAULT_METRIC, metricB=DEFAULT_METRIC):
+                             metricA=DEFAULT_METRIC, metricB=DEFAULT_METRIC, n_tiles=64):
     """Run the full pipeline on one slide with no HTTP session, returning a
     session-like dict ready for _save_session_folder.
 
@@ -1148,11 +1324,16 @@ def _process_slide_headless(slide_path, archA, archB, percentile, occlusion,
     s["selected"] = cand
     s["percentile"] = percentile
 
-    # extract + Stage B
-    mB = get_model("stage_b", archB, metricB)
-    _, foldB, _ = resolve_best_checkpoint("stage_b", archB, metricB)
+    # extract every selected region's 2048 patch (always -- used for the report/figures
+    # regardless of which Stage-B method classifies them)
+    is_resuni = archB == "resuni"
+    mB = None if is_resuni else get_model("stage_b", archB, metricB)
+    foldB = None
+    if not is_resuni:
+        _, foldB, _ = resolve_best_checkpoint("stage_b", archB, metricB)
     slide = openslide.OpenSlide(mapping.wsi_path)
     probs_stack = []
+    bboxes = []
     try:
         for sel in cand:
             bbox_thumb = grid_cell_bbox(sel["row"], sel["col"], GRID[0], GRID[1],
@@ -1161,6 +1342,7 @@ def _process_slide_headless(slide_path, archA, archB, percentile, occlusion,
             if wsi_bbox is None:
                 continue
             wx, wy, ww, wh = wsi_bbox
+            bboxes.append(wsi_bbox)
             patch = slide.read_region((wx, wy), 0, (ww, wh)).convert("RGB")
             if patch.size != (OUTPUT_SIZE, OUTPUT_SIZE):
                 patch = patch.resize((OUTPUT_SIZE, OUTPUT_SIZE), Image.BICUBIC)
@@ -1173,6 +1355,8 @@ def _process_slide_headless(slide_path, archA, archB, percentile, occlusion,
             patch = normalize_stage_b_patch(patch, stain_profile)
             s["patches"][(sel["row"], sel["col"])] = patch
             s["patch_bbox"][(sel["row"], sel["col"])] = (wx, wy, ww, wh)
+            if is_resuni:
+                continue  # classified below, once, on all regions pooled together
             pv, _ = forward_probs(mB, patch)
             probs_stack.append(pv)
             if occlusion:
@@ -1196,8 +1380,51 @@ def _process_slide_headless(slide_path, archA, archB, percentile, occlusion,
                 s["occl_top"][(sel["row"], sel["col"])] = {
                     "zoom": zoom, "cell": (int(tr), int(tc)),
                     "importance": round(float(tv), 2)}
+
+        resuni_out = None
+        if is_resuni:
+            if not bboxes:
+                raise RuntimeError("ResUNI requested but Stage A selected no regions")
+            config = resuni.resuni_config_available(archA, metricA)
+            if config is None:
+                raise RuntimeError(f"no trained ResUNI head for Stage A = {archA}/{metricA} "
+                                   "(supported: resnet18/f1, resnet50/f1, resnet50/auc)")
+            if not resuni.heads_available(config, n_tiles):
+                raise RuntimeError(f"no UNI2-h head trained with {n_tiles} tiles for {config}")
+            tiles, _ = resuni.sample_region_tiles(slide, mapping.base_mpp, bboxes, n=n_tiles)
+            if not tiles:
+                raise RuntimeError("no tissue tiles found inside the selected regions")
+            feats = resuni.embed_tiles(tiles, DEVICE)
+            resuni_out = resuni.predict_from_features(feats, config, n_tiles)
+            s["resuni"] = _resuni_state(config, tiles, resuni_out,
+                                        {k: tuple(int(v) for v in bb) for k, bb in s["patch_bbox"].items()})
+            if occlusion:
+                for sel in cand:
+                    if (sel["row"], sel["col"]) in s["resuni"]["regions"]:
+                        _tile_evidence(s, sel["row"], sel["col"])
     finally:
         slide.close()
+
+    if is_resuni:
+        if resuni_out is not None:
+            slide_probs, predB = resuni_out["ens_probs"], resuni_out["pred_idx"]
+            s["stage_b"] = {"arch": "resuni", "metric": config, "slide_probs": slide_probs, "pred_idx": predB}
+            s["results"]["stage_b"] = {
+                "arch": "resuni", "metric": config,
+                "checkpoint_fold": f"UNI2-h ({config}, {n_tiles} tiles, 5-fold ensemble)",
+                "subtype_pred": SUBTYPE_CLASSES[predB],
+                "prob_IDH_mt": round(float(slide_probs[0]), 2),
+                "prob_IDH_mt_1p19q": round(float(slide_probs[1]), 2),
+                "prob_IDH_wt": round(float(slide_probs[2]), 2),
+                "confidence": entropy_conf(slide_probs),
+                "n_patches": len(bboxes), "n_tiles": n_tiles}
+            gc = grade_class_short(GRADE_CLASSES[predA])
+            st = SUBTYPE_CLASSES[predB]
+            dx = "Control tissue" if gc == "control" else INTEGRATED.get((gc, st), "Unresolved")
+            s["results"]["integrated"] = {
+                "diagnosis": dx,
+                "confidence": round(entropy_conf(probsA) * entropy_conf(slide_probs), 2)}
+        return s
 
     if probs_stack:
         slide_probs = np.mean(np.stack(probs_stack, 0), axis=0)
@@ -1221,165 +1448,22 @@ def _process_slide_headless(slide_path, archA, archB, percentile, occlusion,
 
 
 # ============================================================
-# METHODOLOGY WALKTHROUGH  (real pipeline on a preset example)
+# METHODOLOGY EXPLAINER  (animations and figures of the GL-SPARSE talk)
 # ============================================================
-
-def _permuted_control(seed=SEED, grid=GRID):
-    """Reproduce the exact permuted control the risk map uses. Returns
-    (control_square_img, permuted_img, permuted_tiles_list, order)."""
-    ctrl = control_img()
-    ctrl_sq = ctrl.resize((THUMB_SIZE, THUMB_SIZE), Image.BILINEAR)
-    tiles = list(tile_image(ctrl_sq, grid))
-    rng = np.random.default_rng(seed)
-    order = rng.permutation(len(tiles))
-    permuted = [tiles[i] for i in order]
-    perm_img = reconstruct_image(permuted, grid, ctrl_sq.size)
-    return ctrl_sq, perm_img, permuted, order
+# Static media bundled next to index.html (scripts/dashboard/explainer/, added to
+# the exe with --add-data). The explainer used to recompute a ResNet Stage-B
+# walkthrough on a preset slide; it now shows the talk's animations, which follow
+# the final pipeline (patch injection at the same position, frozen UNI2-h Stage B).
+EXPLAINER_DIR = HERE / "explainer"
+_EXPLAINER_TYPES = {".mp4": "video/mp4", ".png": "image/png", ".jpg": "image/jpeg"}
 
 
-METHOD_CACHE_DIR = REPO_ROOT / "scripts" / "dashboard" / "methodology_cache"
-
-
-def _injection_demo(thumbnail, model, target_class, top_cells, grid=GRID, seed=SEED):
-    """Show the ACTUAL patch injection: for each of a few high-signal target
-    tiles, replace one tile of the permuted control with that target tile and
-    record how the model's target-class logit changes. Returns the base
-    (no-injection) logit and a list of per-injection frames with before/after
-    images and logits."""
-    ctrl_sq, perm_img, permuted_tiles, _ = _permuted_control(seed, grid)
-    rows, cols = grid
-    # baseline: permuted control alone
-    _, base_logits = forward_probs(model, perm_img)
-    base_logit = float(base_logits[target_class])
-
-    target_tiles = list(tile_image(thumbnail, grid))
-    frames = []
-    # inject into a fixed, visually central control slot so the eye can follow it
-    slot = (rows // 2) * cols + (cols // 2)
-    for (r, c) in top_cells[:4]:
-        tgt_tile = target_tiles[r * cols + c]
-        injected = list(permuted_tiles)
-        injected[slot] = tgt_tile
-        inj_img = reconstruct_image(injected, grid, ctrl_sq.size)
-        _, inj_logits = forward_probs(model, inj_img)
-        inj_logit = float(inj_logits[target_class])
-        frames.append({
-            "row": int(r), "col": int(c),
-            "slot_row": slot // cols, "slot_col": slot % cols,
-            "injected_img": b64(inj_img),
-            "target_tile": b64(tgt_tile.resize((256, 256), Image.BILINEAR)),
-            "logit": round(inj_logit, 3),
-            "delta": round(inj_logit - base_logit, 3),
-        })
-    return {
-        "permuted_img": b64(perm_img),
-        "base_logit": round(base_logit, 3),
-        "slot_row": slot // cols, "slot_col": slot % cols,
-        "frames": frames,
-    }
-
-
-def _compute_methodology(save_dir):
-    """Run the entire methodology pipeline ONCE on the preset slide and return a
-    fully self-contained dict (all images as b64, all params). Also writes it to
-    save_dir/methodology_cache.json so subsequent opens load instantly."""
-    target = Path(METHODOLOGY_TARGET)
-    if not target.exists():
-        raise HTTPException(400, f"preset example slide not found: {target}")
-
-    import tempfile
-    tmp_dir = Path(tempfile.mkdtemp(prefix="gs_method_"))
-    thumb_path = tmp_dir / f"{target.stem}.jpg"
-    thumbnail, _, _ = create_wsi_thumbnail(
-        target, output_path=str(thumb_path), target_mpp=TARGET_MPP, output_size=THUMB_SIZE,
-        stain_profile=None)
-    mapping = load_mapping(thumb_path)
-
-    # real pipeline (RN50/RN50, p95, occlusion on) via the shared headless runner
-    s = _process_slide_headless(target, "resnet50", "resnet50",
-                                percentile=95.0, occlusion=True, stain_profile=None)
-
-    mA = get_model("stage_a", "resnet50")
-    rm = s["risk_map"]
-    norm = (rm - rm.min()) / (np.ptp(rm) + 1e-8)
-
-    # ordered high-signal cells for the injection demo
-    flat = [(rm[r, c], r, c) for r in range(GRID[0]) for c in range(GRID[1])]
-    flat.sort(key=lambda t: -t[0])
-    top_cells = [(r, c) for _, r, c in flat]
-    injection = _injection_demo(s["thumbnail"], mA, s["stage_a"]["pred_idx"], top_cells)
-
-    # extracted patches + per-patch probs + occlusion
-    mB = get_model("stage_b", "resnet50")
-    patches = []
-    for sel in s["selected"]:
-        r, c = sel["row"], sel["col"]
-        patch = s["patches"].get((r, c))
-        if patch is None:
-            continue
-        pv, _ = forward_probs(mB, patch)
-        occ = s["occlusion"].get((r, c))
-        occ_top = s["occl_top"].get((r, c))
-        patches.append({
-            "row": r, "col": c, "risk": sel.get("risk"), "tissue": sel.get("tissue"),
-            "patch": b64(patch),
-            "wsi_bbox": list(s["patch_bbox"].get((r, c))) if s["patch_bbox"].get((r, c)) else None,
-            "probs": {"IDH_mt": round(float(pv[0]), 3),
-                      "IDH_mt_1p19q": round(float(pv[1]), 3),
-                      "IDH_wt": round(float(pv[2]), 3)},
-            "pred": SUBTYPE_CLASSES[int(np.argmax(pv))],
-            "occl_grid": ([[round(float(x), 3) for x in row]
-                           for row in ((occ - occ.min()) / (np.ptp(occ) + 1e-8))]
-                          if occ is not None else None),
-            "occl_top": ({"cell": list(occ_top["cell"]), "zoom": b64(occ_top["zoom"])}
-                         if occ_top else None),
-        })
-
-    ctrl_sq, _, _, _ = _permuted_control()
-    payload = {
-        "slide_id": target.stem,
-        "target_thumb": b64(s["thumbnail"]),
-        "thumbnail_w": s["thumbnail"].size[0], "thumbnail_h": s["thumbnail"].size[1],
-        "control_orig": b64(ctrl_sq), "control_permuted": injection["permuted_img"],
-        "grid": list(GRID),
-        "risk_grid": [[round(float(v), 3) for v in row] for row in norm],
-        "raw_grid": [[round(float(v), 2) for v in row] for row in rm],
-        "selected": s["selected"],
-        "injection": injection,
-        "patches": patches,
-        "stage_a": s["results"].get("stage_a"),
-        "stage_b": s["results"].get("stage_b"),
-        "integrated": s["results"].get("integrated"),
-        "percentile": 95.0, "archA": "resnet50", "archB": "resnet50",
-    }
-
-    save_dir.mkdir(parents=True, exist_ok=True)
-    (save_dir / "methodology_cache.json").write_text(json.dumps(payload))
-    return payload
-
-
-@app.post("/api/methodology")
-def api_methodology():
-    """Return the fully-precomputed methodology walkthrough. Computes once
-    (real pipeline + real injection demo) and caches to disk; every later call
-    loads the cache instantly, so the walkthrough never recomputes."""
-    cache = METHOD_CACHE_DIR / "methodology_cache.json"
-    if cache.exists():
-        try:
-            return json.loads(cache.read_text())
-        except Exception:
-            pass   # corrupt cache -> recompute
-    return _compute_methodology(METHOD_CACHE_DIR)
-
-
-@app.post("/api/methodology_rebuild")
-def api_methodology_rebuild():
-    """Force a recompute of the methodology cache (e.g. after changing the
-    preset slide or the models)."""
-    cache = METHOD_CACHE_DIR / "methodology_cache.json"
-    if cache.exists():
-        cache.unlink()
-    return _compute_methodology(METHOD_CACHE_DIR)
+@app.get("/explainer/{name}")
+def explainer_media(name: str):
+    path = (EXPLAINER_DIR / name).resolve()
+    if path.parent != EXPLAINER_DIR.resolve() or path.suffix.lower() not in _EXPLAINER_TYPES or not path.exists():
+        raise HTTPException(404, "not found")
+    return FileResponse(path, media_type=_EXPLAINER_TYPES[path.suffix.lower()])
 
 
 @app.post("/api/browse_output")
@@ -1427,7 +1511,7 @@ def _preview_overlay(thumbnail, risk_map):
 
 def _batch_worker(slide_path_str, archA, archB, percentile, occlusion,
                   save_patches, run_dir_str, result_queue, stain_profile=None,
-                  metricA=DEFAULT_METRIC, metricB=DEFAULT_METRIC):
+                  metricA=DEFAULT_METRIC, metricB=DEFAULT_METRIC, n_tiles=64):
     """Runs in its own OS process (see _run_batch). Processes one slide fully
     and puts a small, picklable result dict onto result_queue."""
     slide_path = Path(slide_path_str)
@@ -1435,7 +1519,7 @@ def _batch_worker(slide_path_str, archA, archB, percentile, occlusion,
     try:
         s = _process_slide_headless(slide_path, archA, archB, percentile, occlusion,
                                     stain_profile=stain_profile,
-                                    metricA=metricA, metricB=metricB)
+                                    metricA=metricA, metricB=metricB, n_tiles=n_tiles)
 
         base = _safe_slide_folder_name(slide_path.stem)
         gs = run_dir / base
@@ -1488,7 +1572,7 @@ def _run_batch(run_id, slides, run_dir, req):
             target=_batch_worker,
             args=(str(sp), req.archA, req.archB, req.percentile, req.occlusion,
                  req.save_patches, str(run_dir), result_queue, req.stain_profile,
-                 req.metricA, req.metricB),
+                 req.metricA, req.metricB, req.n_tiles),
             daemon=True)
         proc.start()
         proc.join(timeout=SLIDE_TIMEOUT_SECONDS)

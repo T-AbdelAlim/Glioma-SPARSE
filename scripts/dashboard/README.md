@@ -2,7 +2,7 @@
 
 An interactive, animated browser interface for the two-stage Glioma-SPARSE
 pipeline. The browser renders the workflow; a local FastAPI backend runs the
-real pathology code (OpenSlide, your ResNet checkpoints, patch injection),
+real pathology code (OpenSlide, your ResNet checkpoints, patch injection, UNI2-h),
 mirroring `inference_report.py` / `inference_end_to_end.py` exactly.
 
 ## Layout
@@ -20,7 +20,7 @@ Glioma-SPARSE/
 ## Install
 
 ```
-pip install fastapi uvicorn pillow numpy torch torchvision openslide-python openpyxl matplotlib
+pip install fastapi uvicorn pillow numpy torch torchvision openslide-python openpyxl matplotlib timm
 ```
 
 (OpenSlide also needs its native library on Windows: install the OpenSlide
@@ -41,24 +41,75 @@ Open http://127.0.0.1:8000
 1. **Import**: paste a full WSI path (e.g. `C:\...\slide.ndpi`) and click Import.
    A `GS_analysis/` folder is created next to the slide, containing the
    thumbnail + `.json` sidecar, and `figures/` and `report/` subfolders.
-2. **Models**: switch Stage A and Stage B between RN18 and RN50 independently.
-   The fold is locked to `split_02` for this demo (the four checkpoint paths are
-   in `backend.py`, `CHECKPOINTS`).
-3. **Parameters**: risk percentile (default 95), tile cap (default 4), and
-   toggles for the signal map, class predictions, raw values (p and
-   uncertainty, 2 decimals), and the Stage B occlusion heatmap (off by default).
-4. **Run full pipeline**: animates thumbnail → grade → signal map → selected
-   tiles → connector lines to the extracted high-res patches → into Stage B →
-   molecular prediction → integrated diagnosis.
-5. **Save results**: writes a colored `.xlsx` report to `GS_analysis/report/`
-   and 2048×2048 JPGs (risk map, patches, occlusion overlays) to
-   `GS_analysis/figures/`.
+2. **Models**: Stage A is a ResNet-50 (default) or ResNet-18, best-F1 or best-AUC checkpoint.
+   Stage B is always the frozen UNI2-h foundation model with a logistic-regression head
+   (the earlier ResNet Stage B options were removed).
+3. **Stage B tiles**: number of 20× tiles drawn at random from the selected regions and
+   encoded by UNI2-h: 8, 16, 32, 64 (default), 128, 256, 512 or 1024. Each count uses a head
+   trained with that number of tiles; counts without a trained head are greyed out
+   (ResNet-50 and ResNet-18 best-F1 have all counts, ResNet-50 best-AUC only 64).
+   Accuracy plateaus from about 32 tiles (manuscript, Figure 7).
+4. **Parameters**: signal percentile (default 95), region cap (default 4 of the 64 grid
+   cells), and toggles for the signal map, class predictions, raw values (2 decimals), and
+   the **Stage B evidence map**: the tiles that made the prediction, coloured by their exact
+   contribution to the molecular prediction (the head is linear), with the most influential
+   tile at 20×. No extra encoding is needed, so it is instant.
+5. **Run full pipeline**: animates thumbnail → grade → signal map → selected regions →
+   64 sampled tiles → UNI2-h → molecular prediction → integrated diagnosis.
+6. **Save results**: writes a colored `.xlsx` report to `GS_analysis/report/` and JPGs
+   (signal map, regions, Stage B tile evidence and top tile) to `GS_analysis/figures/`.
+
+## Methodology explained
+
+The header button opens a step-by-step explainer built from the animations and figures of
+the GL-SPARSE talk (`scripts/dashboard/explainer/`, served at `/explainer/<file>`): slide
+size, the standard foundation-model pipeline, the decomposition by complexity, naive
+injection, training on shuffled mosaics, patch injection, Stage B with UNI2-h, and Stage B tile
+evidence. It presents the method only (results are in the paper). Play all, Prev/Next, the
+dots or the arrow keys navigate.
+To update it, replace the files in `explainer/` (H.264 MP4 or PNG) and edit the `STEPS` list
+in `index.html` (`METHOD` module).
+
+## Stage B: UNI2-h foundation model
+
+Stage B classifies the molecular type from the averaged UNI2-h embeddings of the tiles
+sampled inside Stage A's selected regions (5-fold-ensembled logistic head). Same settings in
+both the interactive run and batch processing.
+
+It needs a local UNI2-h checkpoint, which is **not bundled** with this repo or the packaged
+exe: UNI2-h is a gated model (request access at
+https://huggingface.co/MahmoodLab/UNI2-h, then download `pytorch_model.bin`). Point the app
+at it with:
+
+```
+set GLIOMA_SPARSE_UNI2H_CKPT=C:\path\to\UNI2-h\pytorch_model.bin
+```
+
+or drop the file at `<repo>/models/UNI2-h/pytorch_model.bin`. Without it, `GET /api/config`
+reports `resuni_available: false` and Stage B cannot run (the rest of the app is
+unaffected). The trained per-fold heads themselves (`data/resuni_heads/<config>/lr_n<tiles>_fold<k>.npz`,
+small) *are* bundled, for ResNet18/F1, ResNet50/F1 and ResNet50/AUC; Stage B is unavailable
+for ResNet18/AUC. Needs `timm>=1.0` in addition to the packages above.
+
+## Standalone exe
+
+```
+.venv\Scripts\python.exe scripts\dashboard\build_exe.py
+```
+
+builds `dist\GliomaSPARSE-Dashboard\GliomaSPARSE-Dashboard.exe` (PyInstaller, one folder,
+about 3 GB with torch/CUDA). It bundles `index.html`, the explainer media and the Stage B
+heads, but not the model checkpoints or the UNI2-h weights: those are read from the repo
+paths on this machine (or the env vars above), so the exe is not portable to another
+machine's directory layout. It opens as a native window and serves on port 8000, so close
+any dev server on that port first. Errors go to `dashboard.log` next to the exe.
 
 ## Notes
 
 - All probabilities and uncertainties are shown to 2 decimals.
-- The occlusion heatmap runs 64 forward passes per patch, so it is off by
-  default; turn it on before running if you want Stage B importance maps.
+- ResNet-18 vs ResNet-50 as Stage A: grading is equivalent, but the complete pipeline is
+  1–2 points less accurate with ResNet-18 (manuscript, Supplementary Table S3), so
+  ResNet-50 is the default.
 - Display-only toggles (signal / predictions / raw values) re-render the last
   run instantly without recomputing.
 - Checkpoint paths, control image, and logo path are all set at the top of

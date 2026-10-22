@@ -27,10 +27,16 @@ PyInstaller.__main__.run([
     "--paths", "src",
     "--paths", "scripts/dashboard",
     "--add-data", "scripts/dashboard/index.html;.",
+    # methodology explainer media (talk animations + figures, ~13 MB), served at /explainer/
+    "--add-data", "scripts/dashboard/explainer;explainer",
     "--add-data", "src/glioma_sparse/preprocessing/stain_profiles;glioma_sparse/preprocessing/stain_profiles",
+    # ResUNI's trained per-fold heads (small, ~700 KB total; NOT the UNI2-h encoder weights
+    # themselves -- those are a gated download, see glioma_sparse.models.resuni / README).
+    "--add-data", "data/resuni_heads;data/resuni_heads",
     "--collect-all", "openslide_bin",
     "--collect-all", "torch",
     "--collect-all", "torchvision",
+    "--collect-all", "timm",
     "--collect-all", "webview",
     "--collect-all", "clr_loader",
 ])
