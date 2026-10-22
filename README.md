@@ -3,10 +3,10 @@
 GLIOMA-SPARSE is a lightweight, interpretable computational pathology framework for glioma classification from routine H&E whole-slide images.
 
 The method follows a coarse-to-fine strategy:
-- **Stage A** grades the slide from a low-resolution thumbnail (control / low_grade / high_grade) and, through patch injection, identifies the most informative regions.
-- **Stage B** predicts the molecular subtype (IDH_mt / IDH_mt_1p19q / IDH_wt) from high-resolution patches re-extracted at the Stage A regions.
+- **Stage A** grades the slide from a low-resolution thumbnail (control / low_grade / high_grade) with a ResNet-50 and, through patch injection, localises the regions that drive the grade prediction.
+- **Stage B** predicts the molecular type (IDH_mt / IDH_mt_1p19q / IDH_wt) from a small random sample of 20× tiles (default 64) drawn inside the Stage A regions, encoded by the frozen UNI2-h foundation model, averaged, and classified by a logistic-regression head (Section 8.1). The original ResNet Stage B on re-extracted patches (Sections 7–8) is kept for reference.
 
-The design keeps compute low while preserving diagnostic signal, so the whole pipeline runs on a single modest GPU.
+The design matches compute to the complexity of each subproblem: grade at low resolution with a small network, molecular type from a few high-resolution tiles, so the whole pipeline runs on a single modest GPU.
 
 ---
 
@@ -79,7 +79,8 @@ Git holds the code only. The following stay behind on a clone and have to be cop
 | TCGA-extended runs | `training_output_tcga_ext/`, `training_output_stageB_tcga_ext/` | 1.8 + 1.8 GB | TCGA-extended analyses |
 | Thumbnails | `data/included/` | 0.3 GB | training, dashboard control image |
 | Other data (cohorts, TCGA, test data) | rest of `data/` | ~54 GB | Stage B training, external validation |
-| Dashboard walkthrough cache | `scripts/dashboard/methodology_cache/` | 22 MB | "Methodology explained" without the source slide |
+| Stage B (UNI2-h) heads | `data/resuni_heads/` | 4 MB | dashboard Stage B, per Stage-A config and tile count |
+| UNI2-h weights (gated, MahmoodLab/UNI2-h) | `models/UNI2-h/` or `GLIOMA_SPARSE_UNI2H_CKPT` | – | Stage B with UNI2-h |
 | Cluster scripts | `cluster_scripts/` | 0.1 MB | SLURM jobs |
 | Earlier inference results | `results/` | 20 GB | reference only |
 | Whole-slide images | outside the repo | – | slide import, Stage B extraction |
@@ -90,7 +91,7 @@ With an external drive (here `D:`), from the repo root on the old machine and th
 robocopy ResNet18_output D:\Glioma-SPARSE\ResNet18_output /E
 robocopy ResNet50_output D:\Glioma-SPARSE\ResNet50_output /E
 robocopy data\included D:\Glioma-SPARSE\data\included /E
-robocopy scripts\dashboard\methodology_cache D:\Glioma-SPARSE\scripts\dashboard\methodology_cache /E
+robocopy data\resuni_heads D:\Glioma-SPARSE\data\resuni_heads /E
 robocopy cluster_scripts D:\Glioma-SPARSE\cluster_scripts /E
 
 robocopy D:\Glioma-SPARSE . /E       # on the new machine, inside the fresh clone
@@ -98,7 +99,7 @@ robocopy D:\Glioma-SPARSE . /E       # on the new machine, inside the fresh clon
 
 Then run the setup script; `check_setup` confirms what arrived.
 
-The dashboard, the split CSVs and the inference defaults resolve their files relative to the repo, so the clone can live anywhere. Some generated files do store absolute paths from the machine that made them (thumbnail sidecars point to their WSI, Stage B manifests to their patches); these are resolved again from `--wsi-root`/`--wsi-old-prefix`/`--wsi-new-prefix` and `--cohort-dir`. Cloning to the same folder and keeping the WSIs at the same location avoids passing these at all. The dashboard's "Methodology explained" example slide is only read when the cache is missing; point `GLIOMA_SPARSE_METHOD_SLIDE` at it if needed. The standalone `.exe` is not in git either: rebuild it in the new clone with `python scripts\dashboard\build_exe.py` (Section 14.3).
+The dashboard, the split CSVs and the inference defaults resolve their files relative to the repo, so the clone can live anywhere. Some generated files do store absolute paths from the machine that made them (thumbnail sidecars point to their WSI, Stage B manifests to their patches); these are resolved again from `--wsi-root`/`--wsi-old-prefix`/`--wsi-new-prefix` and `--cohort-dir`. Cloning to the same folder and keeping the WSIs at the same location avoids passing these at all. The standalone `.exe` is not in git either: rebuild it in the new clone with `python scripts\dashboard\build_exe.py` (Section 14.3).
 
 ---
 
@@ -377,6 +378,27 @@ Each run writes to `training_output_stageB/<timestamp>_resnet18_stageB_fold<k>_c
 
 Quadratic weighted kappa appears in the metrics because the shared metric function always computes it, but the molecular subtypes are not ordinal, so for Stage B rely on accuracy, macro-AUC, macro-F1, and the per-class numbers.
 
+### 8.1 Stage B with UNI2-h (final method)
+
+The final pipeline replaces the trained ResNet Stage B by the frozen UNI2-h foundation model with a logistic-regression head. It needs the TRIDENT UNI2-h features of every slide (`features_uni_v2/<slide_id>.h5`, 256 px tiles at 20×) and, per fold, the regions Stage A selects: the Stage B cohort manifests (Section 7.4) for training and validation slides, and the end-to-end test-time regions for test slides:
+
+```
+python -m scripts.analysis.e2e_regions --stage-a-glob "ResNet50_output/training_output/*_split_0*/best_f1.pth" ^
+    --model resnet50 --out results/e2e_regions_rn50_f1.csv
+```
+
+For each fold and number of tiles n, n tiles are drawn at random among the tiles whose centre lies inside the regions (three draws), their UNI2-h features are averaged, and a class-balanced logistic regression is fitted (C chosen on the validation slides). External slides (`--external-*`) get the fold's head unchanged:
+
+```
+python -m scripts.analysis.resuni_predictions --config rn50_f1 --cohort data/stage_b_cohort_RN50_F1 ^
+    --e2e-regions results/e2e_regions_rn50_f1.csv ^
+    --external-regions results/e2e_external_rn50_f1_tcga/per_slide.csv ^
+    --external-features-dir <TRIDENT output>/20x_256px_0px_overlap/features_uni_v2 ^
+    --external-labels results/external_TCGA_val/labels.csv --external-tag tcga
+```
+
+This writes `results/resuni/<config>/predictions*.csv` and the heads `lr_n64_fold<k>.npz`; `resuni_nsweep.py` (same arguments) does the same for 8 to 1,024 and all tiles and saves a head for every n. Copy the heads to `data/resuni_heads/<config>/` for the dashboard. `src/glioma_sparse/models/resuni.py` holds the inference side: tile sampling, UNI2-h encoding, the head, and the exact contribution of every tile to the prediction (the head is linear).
+
 ---
 
 ## 9. END-TO-END INFERENCE
@@ -436,7 +458,7 @@ results/<run-name>/<slide-abbrev>/
     <region>.jpg                           the extracted 2048x2048 Stage B patch
 ```
 
-The optional Stage B risk map (`--stage-b-riskmap`, or `stage_b_riskmap` in `CONFIG`) uses occlusion rather than injection into a control, as described in the manuscript: each tile of a Stage B patch is occluded and the drop in the predicted-class logit is recorded. The strongest tiles are then re-read from the WSI at 2048x2048, a third zoom on top of the thumbnail and the region, so the IDH-indicative areas can be inspected at cellular level. The number of tiles re-zoomed per patch is set by `occlusion_topk`. All generated figures are 300 dpi JPGs sized around 2048 pixels.
+The optional Stage B risk map of this ResNet Stage B (`--stage-b-riskmap`, or `stage_b_riskmap` in `CONFIG`) uses occlusion rather than injection into a control: each tile of a Stage B patch is occluded and the drop in the predicted-class logit is recorded. The strongest tiles are then re-read from the WSI at 2048x2048, a third zoom on top of the thumbnail and the region, so the IDH-indicative areas can be inspected at cellular level. The number of tiles re-zoomed per patch is set by `occlusion_topk`. All generated figures are 300 dpi JPGs sized around 2048 pixels.
 
 The integrated diagnosis report is an `.xlsx` with per-slide predictions, probabilities, and confidences, coloured by uncertainty (green for confident, amber for moderate, red for low). In testset mode it also carries the per-fold summary and the 1p/19q codeletion table as separate sheets.
 
@@ -470,6 +492,13 @@ Report the headline as the five-fold mean ± std, which captures variation from 
 - **Fixed-site injection** (`scripts/stage_a/fixed_site_injection.py`): inject every target tile into one fixed control slot, so the displaced control tile is constant and R reflects tile content alone. Compare its p95 set to the standard same-position map.
 - **Injection demo** (`scripts/demo/injection_demo.py`): explainer figure of the mechanism, with a fixed-site default and a `--same-position` flag.
 - **Model size and no-shuffle**: rerun Stage A on the same five splits with `--model resnet50`, or with `USE_PATCH_SHUFFLE = False`, for the compute and interpretability-validity arguments. Anything framed as a performance claim uses the full five folds.
+
+Manuscript analyses (`scripts/analysis/`, Stage B with UNI2-h; outputs in `results/`):
+- `master_comparison.py`: Glioma-SPARSE versus the TRIDENT + UNI2-h + CLAM benchmark on the internal folds, with paired tests and compute (FLOPs, parameters).
+- `external_comparison_tcga.py`: the same on the external TCGA cohort (five-fold ensembles).
+- `resuni_nsweep.py` + `revision_oct22_eval.py e2`: accuracy versus the number of tiles passed to UNI2-h, internal and external.
+- `rn18_vs_rn50.py`: ResNet-18 versus ResNet-50 as Stage A (paired comparison, equivalence margin, tile sweep).
+- `region_selection_variants_gpu.py` + `region_selection_variants.py [N]` + `revision_oct22_eval.py e1|e1b`: how Stage A selects the regions (strongest signal, control-logit drop, random regions, random tiles from the whole slide; N random draws).
 
 ---
 
@@ -530,16 +559,18 @@ Notes:
 - The pipeline is reproducible end to end: the split CSVs, `config.json`, and `efficiency.json` make every run traceable.
 - Report five-fold mean ± std, and treat Stage A threshold tuning as a pre-specified sensitivity analysis.
 
+Done since the first version: external validation on TCGA (Section 11, `external_comparison_tcga.py`), the TRIDENT + UNI2-h + CLAM benchmark on the same five splits with compute and energy measurements (`master_comparison.py`), and Stage B with UNI2-h (Section 8.1).
+
 Next steps:
-- External validation cohort (e.g. TCGA) as a generalisation test, added alongside the internal five-fold result.
-- Benchmark rerun on the same five splits for a matched comparison, including the compute measurements.
+- Reduce the size of the Stage B encoder (smaller pathology encoders or a distilled UNI2-h student) and test how far molecular performance holds.
+- Validation at further clinical sites with prospectively collected slides.
 - YAML config system and mixed precision (AMP).
 
 ---
 
 ## 14. INTERACTIVE DASHBOARD
 
-A desktop app for running the full pipeline (import a slide -> Stage A grade -> risk map -> Stage B subtype -> integrated diagnosis) without touching the command line. It calls the same `glioma_sparse` modules as the CLI scripts above, so results are identical to `inference_end_to_end.py`.
+A desktop app for running the full pipeline (import a slide -> Stage A grade -> signal map -> Stage B molecular type with UNI2-h -> integrated diagnosis) without touching the command line. It calls the same `glioma_sparse` modules as the scripts above. Details, including the Stage B settings and the UNI2-h weights, are in `scripts/dashboard/README.md`.
 
 ### 14.1 Run from source
 
@@ -552,7 +583,11 @@ Opens as a native window (WebView2 via `pywebview`, not a browser tab), backed b
 
 ### 14.2 Model selection
 
-For each stage (A/B), pick the architecture (ResNet18/ResNet50) and which validation metric (F1 / AUC / accuracy) should decide the "best" fold -- no fold is hardcoded. Every fold under the relevant `training_output*` directory is compared on that metric and the winner's checkpoint is loaded automatically. Stage B pools folds across both patch-extraction cohorts (best-AUC-derived and best-F1-derived Stage A) and picks the single best.
+For Stage A, pick the architecture (ResNet-50, default, or ResNet-18) and which validation metric (F1 / AUC / accuracy) should decide the "best" fold -- no fold is hardcoded. Every fold under the relevant `training_output*` directory is compared on that metric and the winner's checkpoint is loaded automatically. Stage B is always the frozen UNI2-h with the five-fold logistic heads of that Stage A configuration (`data/resuni_heads/`); the number of tiles it encodes can be set from 8 to 1,024 (default 64). The **Stage B evidence map** shows the sampled tiles coloured by their exact contribution to the molecular prediction.
+
+### 14.2.1 Methodology explained
+
+The header button opens a step-by-step explainer of the method built from the talk's animations and figures (`scripts/dashboard/explainer/`): slide size, the standard foundation-model pipeline, the decomposition, shuffled-mosaic training, patch injection and Stage B with UNI2-h.
 
 ### 14.3 Standalone .exe
 
@@ -563,4 +598,4 @@ pip install pyinstaller
 python scripts\dashboard\build_exe.py
 ```
 
-Output: `dist/GliomaSPARSE-Dashboard/GliomaSPARSE-Dashboard.exe`. Double-click to launch -- no Python install needed, opens straight into the app window. The exe reads the checkpoints, control image and logo relative to the repo it was built in (two folders up from the exe), so keep it inside `dist/` of a clone that has the files from Section 1.1; set `GLIOMA_SPARSE_ROOT` to point it at a repo elsewhere.
+Output: `dist/GliomaSPARSE-Dashboard/GliomaSPARSE-Dashboard.exe`. Double-click to launch -- no Python install needed, opens straight into the app window. The exe bundles the frontend, the explainer media and the Stage B heads; it reads the checkpoints, control image and logo relative to the repo it was built in (two folders up from the exe), so keep it inside `dist/` of a clone that has the files from Section 1.1; set `GLIOMA_SPARSE_ROOT` to point it at a repo elsewhere. The UNI2-h weights are not bundled (set `GLIOMA_SPARSE_UNI2H_CKPT` or use `models/UNI2-h/pytorch_model.bin`). The app serves on port 8000, so close any dashboard dev server first.

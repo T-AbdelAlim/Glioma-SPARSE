@@ -30,6 +30,7 @@ tqdm
 
 openslide-python
 openslide-bin
+h5py                # TRIDENT UNI2-h feature files (Stage B with UNI2-h)
 
 # ============================================================
 # MODELS
