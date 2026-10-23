@@ -72,16 +72,44 @@ HERE = (Path(sys._MEIPASS) if getattr(sys, "frozen", False) and hasattr(sys, "_M
         else Path(__file__).resolve().parent)
 
 # repo root: two levels up from this file, or from dist/GliomaSPARSE-Dashboard/
-# for the frozen exe. GLIOMA_SPARSE_ROOT overrides both (e.g. exe moved elsewhere).
-REPO_ROOT = Path(os.environ.get("GLIOMA_SPARSE_ROOT") or (
-    Path(sys.executable).resolve().parents[2] if getattr(sys, "frozen", False)
-    else Path(__file__).resolve().parents[2]))
+# for the frozen exe. GLIOMA_SPARSE_ROOT overrides both. A frozen exe that is not
+# inside a repo with trained models (e.g. copied to another machine) uses the model
+# bundle that build_exe.py packs in (Stage A checkpoints, control image, logo, heads).
+FROZEN = getattr(sys, "frozen", False)
+BUNDLE_DIR = HERE / "bundle"
+_root = (Path(sys.executable).resolve().parents[2] if FROZEN else Path(__file__).resolve().parents[2])
+if FROZEN and not (_root / "ResNet50_output").exists() and BUNDLE_DIR.exists():
+    _root = BUNDLE_DIR
+REPO_ROOT = Path(os.environ.get("GLIOMA_SPARSE_ROOT") or _root)
 
 # resuni.py resolves its own REPO_ROOT from __file__, which is wrong once frozen (PyInstaller
 # extracts src/glioma_sparse/models/resuni.py somewhere under _MEIPASS, not the real repo/exe
 # tree) -- point it at the REPO_ROOT just computed above, which already handles both cases.
 resuni.REPO_ROOT = REPO_ROOT
 resuni.HEADS_DIR = REPO_ROOT / "data" / "resuni_heads"
+
+# UNI2-h (gated, never bundled): besides the env var and the repo locations in resuni.py,
+# look next to the exe (models/UNI2-h/pytorch_model.bin) and in the file the user located
+# in the app, which is remembered in %APPDATA%/GliomaSPARSE/settings.json.
+SETTINGS_FILE = Path(os.environ.get("APPDATA") or Path.home()) / "GliomaSPARSE" / "settings.json"
+
+
+def _load_settings():
+    try:
+        return json.loads(SETTINGS_FILE.read_text())
+    except Exception:
+        return {}
+
+
+def _save_settings(**kv):
+    s = _load_settings(); s.update(kv)
+    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    SETTINGS_FILE.write_text(json.dumps(s, indent=1))
+
+
+if FROZEN:
+    resuni.EXTRA_UNI_CANDIDATES = [Path(sys.executable).resolve().parent / "models" / "UNI2-h" / "pytorch_model.bin"]
+resuni.USER_UNI_CKPT = _load_settings().get("uni2h_ckpt")
 
 # checkpoints are resolved dynamically (see resolve_best_checkpoint): for a
 # given arch+metric, every fold under the relevant training_output* dir is
@@ -391,6 +419,8 @@ def config():
         # not redistributed with this repo -- see README) plus the trained head for the
         # chosen Stage-A arch/metric; the frontend hides the option when either is missing.
         "resuni_available": resuni.uni2h_available(),
+        "uni2h_path": str(resuni.uni_checkpoint_path()) if resuni.uni_checkpoint_path() else None,
+        "models_from_bundle": REPO_ROOT == BUNDLE_DIR,
         "resuni_configs": resuni.resuni_available_configs(),
         "resuni_tile_options": {f"{a}:{m}": (resuni.tile_options(cfg) if cfg else [])
                                 for (a, m) in resuni.CONFIG_FOR_STAGE_A
@@ -424,6 +454,37 @@ def api_browse():
     except Exception as e:
         raise HTTPException(400,
             f"native file dialog unavailable ({e}); paste the path manually")
+
+
+class UniLocateReq(BaseModel):
+    path: str | None = None   # optional: a pasted path instead of the file dialog
+
+
+@app.post("/api/uni2h_locate")
+def api_uni2h_locate(req: UniLocateReq = UniLocateReq()):
+    """Let the user point the app at their UNI2-h pytorch_model.bin (gated model, downloaded by
+    the user after requesting access). Checked, then remembered in the user's settings."""
+    path = req.path
+    if not path:
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+            root = tk.Tk(); root.withdraw(); root.attributes("-topmost", True)
+            path = filedialog.askopenfilename(
+                title="Locate the UNI2-h weights (pytorch_model.bin)",
+                filetypes=[("UNI2-h weights", "*.bin *.pth"), ("All files", "*.*")])
+            root.destroy()
+        except Exception as e:
+            raise HTTPException(400, f"native file dialog unavailable ({e}); paste the path instead")
+    if not path:
+        return {"ok": False, "message": "no file chosen"}
+    problem = resuni.check_uni_checkpoint(path)
+    if problem:
+        return {"ok": False, "message": f"{Path(path).name}: {problem}"}
+    _save_settings(uni2h_ckpt=str(Path(path)))
+    resuni.USER_UNI_CKPT = str(Path(path))
+    resuni.reset_encoder()
+    return {"ok": True, "path": str(Path(path)), "message": "UNI2-h weights found"}
 
 
 # ---- 1. IMPORT: build thumbnail + sidecar in a temp dir (no GS folder yet) ----

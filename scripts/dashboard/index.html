@@ -202,6 +202,13 @@
       </label>
       <div class="status" id="modelsInfo" style="margin-top:6px"></div>
       <div class="status" id="resuniInfo" style="margin-top:2px"></div>
+      <div id="uniMissing" class="status" style="display:none;margin-top:8px;padding:8px 10px;border:1px solid #6b5a1e;border-radius:8px;color:#f0c674;line-height:1.45">
+        UNI2-h weights not found. Stage B uses the UNI2-h foundation model, which cannot be shipped with the app:
+        request access at huggingface.co/MahmoodLab/UNI2-h, download <b>pytorch_model.bin</b>, then locate it here
+        (remembered for next time).
+        <button id="btnUniLocate" class="sec" style="margin-top:8px">Locate UNI2-h weights…</button>
+        <div id="uniLocateMsg" style="margin-top:6px"></div>
+      </div>
     </div>
 
     <div class="group">
@@ -374,11 +381,22 @@ function updateModelsInfo(A,B){
 
 // ---- config ----
 S.resuniAvailable=false;S.resuniConfigs={};S.tileOptions={};
-fetch("/api/config").then(r=>r.json()).then(c=>{
-  $("dev").textContent="device: "+c.device;
-  S.resuniAvailable=!!c.resuni_available;S.resuniConfigs=c.resuni_configs||{};S.tileOptions=c.resuni_tile_options||{};
-  updateResuniUI();
-});
+function loadConfig(){
+  return fetch("/api/config").then(r=>r.json()).then(c=>{
+    $("dev").textContent="device: "+c.device;
+    S.resuniAvailable=!!c.resuni_available;S.resuniConfigs=c.resuni_configs||{};S.tileOptions=c.resuni_tile_options||{};
+    $("uniMissing").style.display=S.resuniAvailable?"none":"block";
+    updateResuniUI();
+  });
+}
+loadConfig();
+// UNI2-h is gated and never bundled: let the user point the app at their own download once
+$("btnUniLocate").onclick=async()=>{
+  const m=$("uniLocateMsg");m.textContent="checking…";
+  try{const r=await API("uni2h_locate",{});m.textContent=r.message||"";
+    if(r.ok)await loadConfig();}
+  catch(e){m.textContent="✕ "+e.message;}
+};
 
 // ResUNI's trained head depends on the CURRENT Stage-A choice (only resnet18/f1,
 // resnet50/f1 and resnet50/auc have one); grey the button out otherwise, and fall back
@@ -389,7 +407,7 @@ function updateResuniUI(){
   const ok=S.resuniAvailable&&resuniSupported();
   btn.classList.toggle("disabled",!ok);
   btn.title=!S.resuniAvailable?
-    "UNI2-h checkpoint not found on this machine (see README to enable it)":
+    "UNI2-h weights not found on this machine (use “Locate UNI2-h weights…” below)":
     !ok?`No trained UNI2-h head for Stage A = ${ARCH_LABEL[S.archA]}/${METRIC_LABEL[S.metricA]}`:
     "Stage A regions + UNI2-h foundation-model features + a tiny logistic head (5-fold ensemble)";
   // Stage B is UNI2-h only; tile counts are limited to those with a head trained for this Stage A
@@ -397,8 +415,8 @@ function updateResuniUI(){
   const opts=S.tileOptions[S.archA+":"+S.metricA]||[];
   [...$("selTiles").options].forEach(o=>{o.disabled=!opts.includes(+o.value);});
   if(!opts.includes(S.nTiles)&&opts.length){S.nTiles=opts.includes(64)?64:opts[0];$("selTiles").value=S.nTiles;}
-  $("resuniInfo").textContent=!ok?
-    "No UNI2-h head for this Stage A choice: use ResNet-50 (F1 or AUC) or ResNet-18 (F1).":
+  $("resuniInfo").textContent=!S.resuniAvailable?"Stage B unavailable until the UNI2-h weights are located.":
+    !ok?"No UNI2-h head for this Stage A choice: use ResNet-50 (F1 or AUC) or ResNet-18 (F1).":
     `Molecular type from ${S.nTiles} UNI2-h tiles sampled inside Stage A's regions (5-fold ensemble)`+
     (opts.length<8?` · tile counts with a trained head: ${opts.join(", ")}`:"");
 }

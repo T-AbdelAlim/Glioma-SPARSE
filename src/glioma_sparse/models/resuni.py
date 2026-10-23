@@ -48,21 +48,60 @@ CONFIG_FOR_STAGE_A = {
 }
 
 
+USER_UNI_CKPT = None          # path saved by the dashboard ("Locate UNI2-h weights"), see backend.py
+EXTRA_UNI_CANDIDATES = []     # extra locations, e.g. a models/UNI2-h folder next to the packaged exe
+
+
+def _hf_cache_candidates():
+    """pytorch_model.bin of MahmoodLab/UNI2-h in the Hugging Face hub cache, if it was downloaded there."""
+    roots = [os.environ.get("HF_HUB_CACHE"),
+             str(Path(os.environ["HF_HOME"]) / "hub") if os.environ.get("HF_HOME") else None,
+             str(Path.home() / ".cache" / "huggingface" / "hub")]
+    found = []
+    for r in filter(None, roots):
+        found += sorted(Path(r).glob("models--MahmoodLab--UNI2-h/snapshots/*/pytorch_model.bin"))
+    return found
+
+
 def uni_checkpoint_path():
     p = os.environ.get("GLIOMA_SPARSE_UNI2H_CKPT")
-    if p:
+    if p and Path(p).exists():
         return Path(p)
     # fallback locations, checked in order, so ResUNI works without setting the env var:
-    # 1) inside this repo, if the user drops the checkpoint there;
-    # 2) the sibling mahmoodlab/TRIDENT checkout's own local_ckpts.json location, if this
-    #    machine already set TRIDENT up (see docs/experiments/EXTERNAL_VALIDATION.md).
-    for candidate in (
+    # 1) the file the user located in the dashboard (saved in their settings);
+    # 2) extra locations set by the caller (models/UNI2-h next to the packaged exe);
+    # 3) inside this repo, if the user drops the checkpoint there;
+    # 4) the sibling mahmoodlab/TRIDENT checkout's own local_ckpts.json location, if this
+    #    machine already set TRIDENT up (see docs/experiments/EXTERNAL_VALIDATION.md);
+    # 5) the Hugging Face hub cache.
+    for candidate in ([Path(USER_UNI_CKPT)] if USER_UNI_CKPT else []) + list(EXTRA_UNI_CANDIDATES) + [
         REPO_ROOT / "models" / "UNI2-h" / "pytorch_model.bin",
         REPO_ROOT.parent / "mahmoodlab" / "models" / "UNI2-h" / "pytorch_model.bin",
-    ):
+    ] + _hf_cache_candidates():
         if candidate.exists():
             return candidate
     return None
+
+
+def check_uni_checkpoint(path):
+    """None if `path` holds the UNI2-h ViT-H/14 weights, else a short reason (memory-mapped, so it is quick)."""
+    path = Path(path)
+    if not path.is_file():
+        return "file not found"
+    try:
+        state = torch.load(path, map_location="cpu", weights_only=True, mmap=True)
+    except Exception as e:
+        return f"not a PyTorch checkpoint ({type(e).__name__})"
+    w = state.get("patch_embed.proj.weight") if isinstance(state, dict) else None
+    if w is None or tuple(w.shape) != (1536, 3, 14, 14) or "blocks.23.norm1.weight" not in state:
+        return "not the UNI2-h checkpoint (expected ViT-H/14 weights, 1536-dim, 24 blocks)"
+    return None
+
+
+def reset_encoder():
+    """Forget the loaded encoder, e.g. after the user located a different checkpoint."""
+    global _encoder, _encoder_transform
+    _encoder, _encoder_transform = None, None
 
 
 def uni2h_available():
