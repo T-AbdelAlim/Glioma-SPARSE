@@ -78,18 +78,21 @@ both the interactive run and batch processing.
 
 It needs a local UNI2-h checkpoint, which is **not bundled** with this repo or the packaged
 exe: UNI2-h is a gated model (request access at
-https://huggingface.co/MahmoodLab/UNI2-h, then download `pytorch_model.bin`). Point the app
-at it with:
+https://huggingface.co/MahmoodLab/UNI2-h, then download `pytorch_model.bin`). The app finds
+it automatically, checking in this order:
 
-```
-set GLIOMA_SPARSE_UNI2H_CKPT=C:\path\to\UNI2-h\pytorch_model.bin
-```
+1. `GLIOMA_SPARSE_UNI2H_CKPT=C:\path\to\UNI2-h\pytorch_model.bin`
+2. the file located earlier in the app (**Locate UNI2-h weights…** in the Stage B panel, shown
+   when no weights are found; the file is checked and remembered in
+   `%APPDATA%\GliomaSPARSE\settings.json`)
+3. `models\UNI2-h\pytorch_model.bin` next to the packaged exe
+4. `<repo>/models/UNI2-h/pytorch_model.bin`, or `models/UNI2-h` in a sibling `mahmoodlab` checkout
+5. the Hugging Face cache (`~/.cache/huggingface/hub/models--MahmoodLab--UNI2-h`, or `HF_HUB_CACHE` / `HF_HOME`)
 
-or drop the file at `<repo>/models/UNI2-h/pytorch_model.bin`. Without it, `GET /api/config`
-reports `resuni_available: false` and Stage B cannot run (the rest of the app is
-unaffected). The trained per-fold heads themselves (`data/resuni_heads/<config>/lr_n<tiles>_fold<k>.npz`,
-small) *are* bundled, for ResNet18/F1, ResNet50/F1 and ResNet50/AUC; Stage B is unavailable
-for ResNet18/AUC. Needs `timm>=1.0` in addition to the packages above.
+Without it, `GET /api/config` reports `resuni_available: false` and Stage B cannot run (the
+rest of the app is unaffected). The trained per-fold heads (`data/resuni_heads/<config>/lr_n<tiles>_fold<k>.npz`)
+exist for ResNet18/F1, ResNet50/F1 and ResNet50/AUC; Stage B is unavailable for
+ResNet18/AUC. Needs `timm>=1.0` in addition to the packages above.
 
 ## Standalone exe
 
@@ -98,11 +101,15 @@ for ResNet18/AUC. Needs `timm>=1.0` in addition to the packages above.
 ```
 
 builds `dist\GliomaSPARSE-Dashboard\GliomaSPARSE-Dashboard.exe` (PyInstaller, one folder,
-about 3 GB with torch/CUDA). It bundles `index.html`, the explainer media and the Stage B
-heads, but not the model checkpoints or the UNI2-h weights: those are read from the repo
-paths on this machine (or the env vars above), so the exe is not portable to another
-machine's directory layout. It opens as a native window and serves on port 8000, so close
-any dev server on that port first. Errors go to `dashboard.log` next to the exe.
+about 3.5 GB with torch/CUDA). The folder can be copied to another Windows machine and run
+there: besides `index.html` and the explainer media it carries a model bundle (about
+420 MB, staged in `build\exe_bundle`): the Stage A checkpoint of the best fold per metric for
+ResNet-18 and ResNet-50 with its validation scores, the control image used for patch
+injection, the logo and the Stage B heads. Started inside a repo that has the trained models
+(e.g. from `dist\`), the exe uses the repo instead; `GLIOMA_SPARSE_ROOT` overrides both.
+The UNI2-h weights are never bundled; the recipient needs their own access and the app finds
+or asks for the file as described above. It opens as a native window and serves on port 8000,
+so close any dev server on that port first. Errors go to `dashboard.log` next to the exe.
 
 ## Notes
 
