@@ -73,11 +73,13 @@ def main():
     ap.add_argument("--external-labels", default=None, help="labels.csv of the external cohort")
     ap.add_argument("--external-tag", default="none", help="suffix for the external output (stain variant)")
     ap.add_argument("--external-only", action="store_true")
+    ap.add_argument("--features-root", default=None,
+                    help="folder of <slide_id>.h5 tile features of the EBRAINS slides (default: TRIDENT features_uni_v2)")
     a = ap.parse_args()
     out = REPO / "results" / "resuni" / a.config
     out.mkdir(parents=True, exist_ok=True)
 
-    idx = dict(index_features(TRIDENT))
+    idx = {p.stem: p for p in Path(a.features_root).glob("*.h5")} if a.features_root else dict(index_features(TRIDENT))
     m = load_manifests(REPO / a.cohort)
     trv = m[m.split.isin(["train", "val"])]
     sub_index = build_subtype_index(REPO / "data/ebrains_thumbnails")
