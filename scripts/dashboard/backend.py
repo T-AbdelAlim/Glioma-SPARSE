@@ -109,6 +109,7 @@ def _save_settings(**kv):
 
 if FROZEN:
     resuni.EXTRA_UNI_CANDIDATES = [Path(sys.executable).resolve().parent / "models" / "UNI2-h" / "pytorch_model.bin"]
+    resuni.EXTRA_DP_CANDIDATES = [Path(sys.executable).resolve().parent / "models" / "DistillPath-KS16-UNI2h" / "model.safetensors"]
 resuni.USER_UNI_CKPT = _load_settings().get("uni2h_ckpt")
 
 # checkpoints are resolved dynamically (see resolve_best_checkpoint): for a
@@ -357,7 +358,8 @@ class StageBReq(BaseModel):
     session_id: str
     arch: str = "resuni"
     metric: str = DEFAULT_METRIC
-    n_tiles: int = 64          # UNI2-h tiles per slide (a head trained with this n must exist)
+    n_tiles: int | str = 64    # tiles per slide, or "all" (a head trained with this n must exist)
+    encoder: str = "distillpath"   # Stage-B encoder: "distillpath" (default) or "uni2h" (resuni.ENCODERS)
 
 class OcclReq(BaseModel):
     session_id: str
@@ -425,6 +427,15 @@ def config():
         "resuni_tile_options": {f"{a}:{m}": (resuni.tile_options(cfg) if cfg else [])
                                 for (a, m) in resuni.CONFIG_FOR_STAGE_A
                                 for cfg in [resuni.resuni_config_available(a, m)]},
+        # per Stage-B encoder (UNI2-h, DistillPath): availability, weights found, heads per Stage-A choice
+        "encoders": {e: {"label": v["label"], "available": resuni.encoder_available(e),
+                         "path": str(p) if (p := (resuni.uni_checkpoint_path() if e == "uni2h"
+                                                  else resuni.distillpath_checkpoint_path())) else None,
+                         "configs": resuni.resuni_available_configs(e),
+                         "tile_options": {f"{a}:{m}": (resuni.tile_options(cfg) if cfg else [])
+                                          for (a, m) in resuni.CONFIG_FOR_STAGE_A
+                                          for cfg in [resuni.resuni_config_available(a, m, e)]}}
+                     for e, v in resuni.ENCODERS.items()},
     }
 
 
@@ -796,20 +807,23 @@ def _selected_bboxes(mapping, selected):
     return out
 
 
-def _run_resuni(s, archA, metricA, n_tiles=64):
-    """ResUNI slide-level prediction: samples UNI2-h tiles from every selected Stage-A
-    region and applies the 5-fold-ensembled head for (archA, metricA). Returns a dict
-    shaped like the ResNet Stage B result plus the raw tile/contribution data (kept in
-    the session for the ResUNI evidence view)."""
-    config = resuni.resuni_config_available(archA, metricA)
+def _run_resuni(s, archA, metricA, n_tiles=64, encoder="distillpath"):
+    """ResUNI slide-level prediction: samples tiles (a number, or "all") from every selected
+    Stage-A region, encodes them with DistillPath or UNI2-h and applies that encoder's
+    5-fold-ensembled head for (archA, metricA). Returns a dict shaped like the ResNet Stage B
+    result plus the raw tile/contribution data (kept in the session for the evidence view)."""
+    n_tiles = resuni.norm_n(n_tiles)
+    label = resuni.ENCODERS[encoder]["label"]
+    config = resuni.resuni_config_available(archA, metricA, encoder)
     if config is None:
-        raise HTTPException(400, f"no ResUNI head for Stage A = {archA}/{metricA} "
-                                 "(supported: resnet18/f1, resnet50/f1, resnet50/auc)")
-    if not resuni.uni2h_available():
-        raise HTTPException(400, "UNI2-h checkpoint not found; set GLIOMA_SPARSE_UNI2H_CKPT "
-                                 "(see README) to enable ResUNI")
+        raise HTTPException(400, f"no {label} head for Stage A = {archA}/{metricA} "
+                                 f"(supported: {', '.join(k for k, ok in resuni.resuni_available_configs(encoder).items() if ok)})")
+    if not resuni.encoder_available(encoder):
+        raise HTTPException(400, "UNI2-h checkpoint not found; set GLIOMA_SPARSE_UNI2H_CKPT (see README)"
+                            if encoder == "uni2h" else
+                            "DistillPath weights not found and huggingface_hub is not installed to fetch them")
     if not resuni.heads_available(config, n_tiles):
-        raise HTTPException(400, f"no UNI2-h head trained with {n_tiles} tiles for Stage A = {archA}/{metricA} "
+        raise HTTPException(400, f"no {label} head trained with {n_tiles} tiles for Stage A = {archA}/{metricA} "
                                  f"(available: {resuni.tile_options(config)})")
     bboxes = _selected_bboxes(s["mapping"], s.get("selected", []))
     if not bboxes:
@@ -821,7 +835,10 @@ def _run_resuni(s, archA, metricA, n_tiles=64):
         slide.close()
     if not tiles:
         raise HTTPException(400, "no tissue tiles found inside the selected regions")
-    feats = resuni.embed_tiles(tiles, DEVICE)
+    try:
+        feats = resuni.embed_tiles(tiles, DEVICE, encoder=encoder)
+    except RuntimeError as e:        # e.g. DistillPath weights could not be downloaded
+        raise HTTPException(400, str(e))
     out = resuni.predict_from_features(feats, config, n_tiles)
     s["resuni"] = _resuni_state(config, tiles, out, _region_bboxes(s))
     s["tile_evidence"] = {}          # evidence depends on this exact draw; recompute on demand
@@ -848,8 +865,15 @@ def _resuni_state(config, tiles, out, regions):
         cx, cy = tx + tw / 2, ty + th / 2
         region_of.append(next((k for k, (bx, by, bw, bh) in regions.items()
                                if bx <= cx < bx + bw and by <= cy < by + bh), None))
+    # keep only the image of each region's most contributing tile (the evidence view's zoom), not of
+    # every tile, so "all" (up to resuni.ALL_TILES_CAP tiles) does not hold thousands of images
+    c = np.asarray(out["contributions"])
+    top = {}
+    for i, key in enumerate(region_of):
+        if key is not None and (key not in top or c[i] > c[top[key]]):
+            top[key] = i
     return {"config": config, "pred_idx": out["pred_idx"], "regions": regions,
-            "tiles": [t[0] for t in tiles], "images": [t[1] for t in tiles], "region_of": region_of,
+            "tiles": [t[0] for t in tiles], "images": {i: tiles[i][1] for i in top.values()}, "region_of": region_of,
             "contributions": np.asarray(out["contributions"], np.float32),
             "slide_mean": out["slide_mean_contribution"], "margin_bias": out["margin_bias"]}
 
@@ -888,7 +912,7 @@ def _tile_evidence(s, row, col):
         "top_tile": (dict(items[[i for i, k in enumerate(R["region_of"]) if k == (row, col)].index(top)],
                           rank_among_all=int(n - order[top])) if top is not None else None),
     }
-    top_img = R["images"][top] if top is not None else None
+    top_img = R["images"].get(top) if top is not None else None
     s.setdefault("tile_evidence", {})[(row, col)] = {"payload": payload, "top_img": top_img}
     return payload, top_img
 
@@ -899,26 +923,29 @@ def api_stage_b(req: StageBReq):
     if req.arch == "resuni":
         if "stage_a" not in s:
             raise HTTPException(400, "run stage_a first")
+        n_req = resuni.norm_n(req.n_tiles)
         slide_probs, pred_idx, config, n_tiles, n_tissue = _run_resuni(
-            s, s["stage_a"]["arch"], s["stage_a"]["metric"], req.n_tiles)
-        fold_name, val_value = f"UNI2-h ({config}, {req.n_tiles} tiles, 5-fold ensemble)", None
-        s["stage_b"] = {"arch": "resuni", "metric": config, "slide_probs": slide_probs, "pred_idx": pred_idx}
+            s, s["stage_a"]["arch"], s["stage_a"]["metric"], n_req, req.encoder)
+        fold_name = f"{resuni.ENCODERS[req.encoder]['label']} ({config}, {n_req} tiles, 5-fold ensemble)"
+        val_value = None
+        s["stage_b"] = {"arch": "resuni", "metric": config, "slide_probs": slide_probs, "pred_idx": pred_idx,
+                        "encoder": req.encoder}
         s["results"]["stage_b"] = {
-            "arch": "resuni", "metric": config, "checkpoint_fold": fold_name,
+            "arch": "resuni", "encoder": req.encoder, "metric": config, "checkpoint_fold": fold_name,
             "subtype_pred": SUBTYPE_CLASSES[pred_idx],
             "prob_IDH_mt": round(float(slide_probs[0]), 2),
             "prob_IDH_mt_1p19q": round(float(slide_probs[1]), 2),
             "prob_IDH_wt": round(float(slide_probs[2]), 2),
             "confidence": entropy_conf(slide_probs),
-            "n_patches": n_tiles, "n_tiles": req.n_tiles,
+            "n_patches": n_tiles, "n_tiles": n_req,
         }
         return {
             "per_patch": [],
             "slide_probs": {SUBTYPE_CLASSES[i]: round(float(slide_probs[i]), 2) for i in range(3)},
             "subtype_pred": SUBTYPE_CLASSES[pred_idx],
             "confidence": entropy_conf(slide_probs),
-            "arch": "resuni", "metric": config, "checkpoint_fold": fold_name, "val_score": val_value,
-            "n_tiles": n_tiles, "n_tissue_tiles_found": n_tissue,
+            "arch": "resuni", "encoder": req.encoder, "metric": config, "checkpoint_fold": fold_name,
+            "val_score": val_value, "n_tiles": n_tiles, "n_tissue_tiles_found": n_tissue,
         }
     if not s["patches"]:
         raise HTTPException(400, "extract at least one patch first")
@@ -1315,7 +1342,8 @@ class BatchReq(BaseModel):
     output_location: str
     archA: str = "resnet50"
     archB: str = "resuni"
-    n_tiles: int = 64
+    n_tiles: int | str = 64
+    encoder: str = "distillpath"
     metricA: str = DEFAULT_METRIC
     metricB: str = DEFAULT_METRIC
     percentile: float = 95.0
@@ -1327,7 +1355,7 @@ class BatchReq(BaseModel):
 
 def _process_slide_headless(slide_path, archA, archB, percentile, occlusion,
                              on_thumbnail=None, on_riskmap=None, stain_profile=None,
-                             metricA=DEFAULT_METRIC, metricB=DEFAULT_METRIC, n_tiles=64):
+                             metricA=DEFAULT_METRIC, metricB=DEFAULT_METRIC, n_tiles=64, encoder="distillpath"):
     """Run the full pipeline on one slide with no HTTP session, returning a
     session-like dict ready for _save_session_folder.
 
@@ -1446,16 +1474,16 @@ def _process_slide_headless(slide_path, archA, archB, percentile, occlusion,
         if is_resuni:
             if not bboxes:
                 raise RuntimeError("ResUNI requested but Stage A selected no regions")
-            config = resuni.resuni_config_available(archA, metricA)
+            label, n_tiles = resuni.ENCODERS[encoder]["label"], resuni.norm_n(n_tiles)
+            config = resuni.resuni_config_available(archA, metricA, encoder)
             if config is None:
-                raise RuntimeError(f"no trained ResUNI head for Stage A = {archA}/{metricA} "
-                                   "(supported: resnet18/f1, resnet50/f1, resnet50/auc)")
+                raise RuntimeError(f"no trained {label} head for Stage A = {archA}/{metricA}")
             if not resuni.heads_available(config, n_tiles):
-                raise RuntimeError(f"no UNI2-h head trained with {n_tiles} tiles for {config}")
+                raise RuntimeError(f"no {label} head trained with {n_tiles} tiles for {config}")
             tiles, _ = resuni.sample_region_tiles(slide, mapping.base_mpp, bboxes, n=n_tiles)
             if not tiles:
                 raise RuntimeError("no tissue tiles found inside the selected regions")
-            feats = resuni.embed_tiles(tiles, DEVICE)
+            feats = resuni.embed_tiles(tiles, DEVICE, encoder=encoder)
             resuni_out = resuni.predict_from_features(feats, config, n_tiles)
             s["resuni"] = _resuni_state(config, tiles, resuni_out,
                                         {k: tuple(int(v) for v in bb) for k, bb in s["patch_bbox"].items()})
@@ -1469,10 +1497,11 @@ def _process_slide_headless(slide_path, archA, archB, percentile, occlusion,
     if is_resuni:
         if resuni_out is not None:
             slide_probs, predB = resuni_out["ens_probs"], resuni_out["pred_idx"]
-            s["stage_b"] = {"arch": "resuni", "metric": config, "slide_probs": slide_probs, "pred_idx": predB}
+            s["stage_b"] = {"arch": "resuni", "metric": config, "slide_probs": slide_probs, "pred_idx": predB,
+                            "encoder": encoder}
             s["results"]["stage_b"] = {
-                "arch": "resuni", "metric": config,
-                "checkpoint_fold": f"UNI2-h ({config}, {n_tiles} tiles, 5-fold ensemble)",
+                "arch": "resuni", "encoder": encoder, "metric": config,
+                "checkpoint_fold": f"{resuni.ENCODERS[encoder]['label']} ({config}, {n_tiles} tiles, 5-fold ensemble)",
                 "subtype_pred": SUBTYPE_CLASSES[predB],
                 "prob_IDH_mt": round(float(slide_probs[0]), 2),
                 "prob_IDH_mt_1p19q": round(float(slide_probs[1]), 2),
@@ -1572,7 +1601,7 @@ def _preview_overlay(thumbnail, risk_map):
 
 def _batch_worker(slide_path_str, archA, archB, percentile, occlusion,
                   save_patches, run_dir_str, result_queue, stain_profile=None,
-                  metricA=DEFAULT_METRIC, metricB=DEFAULT_METRIC, n_tiles=64):
+                  metricA=DEFAULT_METRIC, metricB=DEFAULT_METRIC, n_tiles=64, encoder="distillpath"):
     """Runs in its own OS process (see _run_batch). Processes one slide fully
     and puts a small, picklable result dict onto result_queue."""
     slide_path = Path(slide_path_str)
@@ -1580,7 +1609,7 @@ def _batch_worker(slide_path_str, archA, archB, percentile, occlusion,
     try:
         s = _process_slide_headless(slide_path, archA, archB, percentile, occlusion,
                                     stain_profile=stain_profile,
-                                    metricA=metricA, metricB=metricB, n_tiles=n_tiles)
+                                    metricA=metricA, metricB=metricB, n_tiles=n_tiles, encoder=encoder)
 
         base = _safe_slide_folder_name(slide_path.stem)
         gs = run_dir / base
@@ -1614,6 +1643,7 @@ def _run_batch(run_id, slides, run_dir, req):
 
     index = {"run_id": run_id, "created": time.strftime("%Y-%m-%d %H:%M:%S"),
              "input_folder": req.input_folder, "archA": req.archA, "archB": req.archB,
+             "encoder": req.encoder, "n_tiles": req.n_tiles,
              "metricA": req.metricA, "metricB": req.metricB,
              "percentile": req.percentile, "occlusion": req.occlusion,
              "save_patches": req.save_patches,
@@ -1633,7 +1663,7 @@ def _run_batch(run_id, slides, run_dir, req):
             target=_batch_worker,
             args=(str(sp), req.archA, req.archB, req.percentile, req.occlusion,
                  req.save_patches, str(run_dir), result_queue, req.stain_profile,
-                 req.metricA, req.metricB, req.n_tiles),
+                 req.metricA, req.metricB, req.n_tiles, req.encoder),
             daemon=True)
         proc.start()
         proc.join(timeout=SLIDE_TIMEOUT_SECONDS)
@@ -1702,7 +1732,8 @@ def api_batch(req: BatchReq):
         raise HTTPException(400, f"no WSIs in {inp}")
 
     run_id = uuid.uuid4().hex[:8]
-    run_dir = out_root / (f"GS_batchrun_{_arch_tag(req.archA, req.archB)}_"
+    enc_tag = "DP" if req.encoder == "distillpath" else ""
+    run_dir = out_root / (f"GS_batchrun_{_arch_tag(req.archA, req.archB)}{enc_tag}_"
                           f"{_metric_tag(req.metricA, req.metricB)}_{run_id}")
     run_dir.mkdir(parents=True, exist_ok=False)
 
@@ -1761,7 +1792,8 @@ def _write_batch_xlsx(path, index):
     ws["A1"].font = Font(bold=True, size=14, color="1F3864")
     ws.append(["created", index["created"], "models",
                f"A:{index['archA']}/{index.get('metricA','f1')} "
-               f"B:{index['archB']}/{index.get('metricB','f1')}", "p", index["percentile"]])
+               f"B:{resuni.ENCODERS.get(index.get('encoder', 'uni2h'), {}).get('label', index['archB'])}"
+               f"/{index.get('metricB','f1')}", "p", index["percentile"]])
     ws.append([])
     hdr = ["#", "slide_id", "grade", "subtype", "integrated diagnosis",
            "confidence", "status"]

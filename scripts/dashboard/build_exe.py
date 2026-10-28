@@ -11,7 +11,10 @@ patch injection, the logo and the Stage B heads (data/resuni_heads). Started ins
 a repo that has the trained models, the exe uses the repo instead. The UNI2-h
 weights are never bundled (gated model): the app finds them via
 GLIOMA_SPARSE_UNI2H_CKPT, models/UNI2-h/pytorch_model.bin next to the exe, the
-Hugging Face cache, or the user locates the file once in the app.
+Hugging Face cache, or the user locates the file once in the app. Nor are the
+DistillPath weights (non-commercial licence): found via GLIOMA_SPARSE_DISTILLPATH_CKPT,
+models/DistillPath-KS16-UNI2h/model.safetensors next to the exe or the Hugging Face
+cache, or downloaded from the hub on first use.
 
 Windowed (no console): the app opens as a native window (pywebview /
 WebView2), not a browser tab. Since there's no console to show errors,
@@ -85,6 +88,9 @@ PyInstaller.__main__.run([
     "--collect-all", "torch",
     "--collect-all", "torchvision",
     "--collect-all", "timm",
+    # DistillPath: local weights (safetensors) or a download from the hub on first use
+    "--collect-all", "safetensors",
+    "--collect-all", "huggingface_hub",
     "--collect-all", "webview",
     "--collect-all", "clr_loader",
 ])

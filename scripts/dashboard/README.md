@@ -42,20 +42,24 @@ Open http://127.0.0.1:8000
    A `GS_analysis/` folder is created next to the slide, containing the
    thumbnail + `.json` sidecar, and `figures/` and `report/` subfolders.
 2. **Models**: Stage A is a ResNet-50 (default) or ResNet-18, best-F1 or best-AUC checkpoint.
-   Stage B is always the frozen UNI2-h foundation model with a logistic-regression head
-   (the earlier ResNet Stage B options were removed).
-3. **Stage B tiles**: number of 20× tiles drawn at random from the selected regions and
-   encoded by UNI2-h: 8, 16, 32, 64 (default), 128, 256, 512 or 1024. Each count uses a head
-   trained with that number of tiles; counts without a trained head are greyed out
-   (ResNet-50 and ResNet-18 best-F1 have all counts, ResNet-50 best-AUC only 64).
-   Accuracy plateaus from about 32 tiles (manuscript, Figure 7).
+   Stage B is a frozen pathology encoder with a logistic-regression head: **DistillPath**
+   (default; DistillPath-KS16-UNI2h, a 22M ViT-S/16 distilled from UNI2-h) or **UNI2-h**
+   (681M). DistillPath has heads for ResNet-50 and ResNet-18 best-F1; with ResNet-50 best-AUC
+   the app switches to UNI2-h, and back to your choice when the Stage A choice allows it.
+   Manuscript (Table 3): DistillPath is as accurate as UNI2-h internally, less accurate on TCGA.
+3. **Stage B tiles**: a slider over the number of 20× tiles drawn at random from the selected
+   regions: 8, 16, 32, 64 (default), 128, 256, 512, 1024 or **all** (every tissue tile in the
+   regions, at most 4,096). Each count uses a head trained with that number of tiles; the
+   slider snaps to the nearest count with a trained head and dims the others (ResNet-50 and
+   ResNet-18 best-F1 have all counts for both encoders, ResNet-50 best-AUC only 64 with UNI2-h).
+   Accuracy plateaus from about 32 tiles (manuscript, Supplementary Figure S6).
 4. **Parameters**: signal percentile (default 95), region cap (default 4 of the 64 grid
    cells), and toggles for the signal map, class predictions, raw values (2 decimals), and
    the **Stage B evidence map**: the tiles that made the prediction, coloured by their exact
    contribution to the molecular prediction (the head is linear), with the most influential
    tile at 20×. No extra encoding is needed, so it is instant.
 5. **Run full pipeline**: animates thumbnail → grade → signal map → selected regions →
-   64 sampled tiles → UNI2-h → molecular prediction → integrated diagnosis.
+   sampled tiles → DistillPath or UNI2-h → molecular prediction → integrated diagnosis.
 6. **Save results**: writes a colored `.xlsx` report to `GS_analysis/report/` and JPGs
    (signal map, regions, Stage B tile evidence and top tile) to `GS_analysis/figures/`.
 
@@ -70,11 +74,30 @@ dots or the arrow keys navigate.
 To update it, replace the files in `explainer/` (H.264 MP4 or PNG) and edit the `STEPS` list
 in `index.html` (`METHOD` module).
 
-## Stage B: UNI2-h foundation model
+## Stage B: DistillPath or UNI2-h
 
-Stage B classifies the molecular type from the averaged UNI2-h embeddings of the tiles
-sampled inside Stage A's selected regions (5-fold-ensembled logistic head). Same settings in
-both the interactive run and batch processing.
+Stage B classifies the molecular type from the averaged embeddings of the tiles sampled
+inside Stage A's selected regions (5-fold-ensembled logistic head of the chosen encoder;
+heads in `data/resuni_heads/<config>` for UNI2-h and `<config>_dp_uni2h` for DistillPath,
+copied from the manuscript runs). Same settings in both the interactive run and batch
+processing; batch runs with DistillPath are tagged `DP` in the run folder name.
+
+### DistillPath (default)
+
+DistillPath-KS16-UNI2h (https://huggingface.co/RamonK/DistillPath-KS16-UNI2h) is public but
+under a non-commercial licence, so it is not bundled either. No access request is needed:
+the app uses a local copy if there is one, and otherwise downloads it (86 MB) from the Hugging
+Face hub on first use. It checks, in this order:
+
+1. `GLIOMA_SPARSE_DISTILLPATH_CKPT=C:\path\to\model.safetensors`
+2. `models\DistillPath-KS16-UNI2h\model.safetensors` next to the packaged exe
+3. `<repo>/models/DistillPath-KS16-UNI2h/model.safetensors`, or the same in a sibling `mahmoodlab` checkout
+4. the Hugging Face cache (`~/.cache/huggingface/hub/models--RamonK--DistillPath-KS16-UNI2h`, or `HF_HUB_CACHE` / `HF_HOME`)
+
+Tiles get the input pipeline of the manuscript features (224 px, mean = std = 0.5); the
+dashboard's features match the manuscript's (cosine similarity 0.995 on EBRAINS tiles).
+
+### UNI2-h
 
 It needs a local UNI2-h checkpoint, which is **not bundled** with this repo or the packaged
 exe: UNI2-h is a gated model (request access at
@@ -89,10 +112,12 @@ it automatically, checking in this order:
 4. `<repo>/models/UNI2-h/pytorch_model.bin`, or `models/UNI2-h` in a sibling `mahmoodlab` checkout
 5. the Hugging Face cache (`~/.cache/huggingface/hub/models--MahmoodLab--UNI2-h`, or `HF_HUB_CACHE` / `HF_HOME`)
 
-Without it, `GET /api/config` reports `resuni_available: false` and Stage B cannot run (the
-rest of the app is unaffected). The trained per-fold heads (`data/resuni_heads/<config>/lr_n<tiles>_fold<k>.npz`)
-exist for ResNet18/F1, ResNet50/F1 and ResNet50/AUC; Stage B is unavailable for
-ResNet18/AUC. Needs `timm>=1.0` in addition to the packages above.
+Without it, `GET /api/config` reports `resuni_available: false` (and `encoders.uni2h.available: false`)
+and the UNI2-h option is greyed out; DistillPath still runs. The trained per-fold heads
+(`data/resuni_heads/<config>/lr_n<tiles>_fold<k>.npz`, `<tiles>` a number or `all`) exist for
+ResNet18/F1, ResNet50/F1 and ResNet50/AUC (64 tiles only) with UNI2-h, and for ResNet18/F1 and
+ResNet50/F1 with DistillPath; Stage B is unavailable for ResNet18/AUC. Needs `timm>=1.0`
+(and `huggingface_hub` to download DistillPath) in addition to the packages above.
 
 ## Standalone exe
 

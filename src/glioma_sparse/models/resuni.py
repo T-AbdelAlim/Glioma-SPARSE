@@ -19,6 +19,14 @@ UNI2-h is a gated model (https://huggingface.co/MahmoodLab/UNI2-h) and its weigh
 redistributed with this repository. Point GLIOMA_SPARSE_UNI2H_CKPT at a local
 `pytorch_model.bin` (downloaded after requesting access) to enable ResUNI; without it,
 `uni2h_available()` returns False and the dashboard hides the option.
+
+DistillPath-KS16-UNI2h (ViT-S/16, 22M parameters, 384-d, distilled from UNI2-h) is the alternative
+encoder of the manuscript (Table 3). Same tiles; its own input pipeline (224 px, mean = std = 0.5,
+as TRIDENT's kaiko transform used for the paper's features) and its own heads
+(<config>_dp_uni2h, copied from results/resuni/rn50_f1_dp_uni2h and rn18_f1_dp_uni2h_full). Its
+weights are public but under a non-commercial licence, so they are not bundled either: the file is
+found locally (GLIOMA_SPARSE_DISTILLPATH_CKPT, models/DistillPath-KS16-UNI2h, the Hugging Face
+cache) or downloaded from the hub on first use.
 """
 
 from pathlib import Path
@@ -48,8 +56,16 @@ CONFIG_FOR_STAGE_A = {
 }
 
 
+# Stage-B encoders; each has its own heads in HEADS_DIR / (config + suffix)
+ENCODERS = {
+    "uni2h": {"label": "UNI2-h", "dim": 1536, "suffix": ""},
+    "distillpath": {"label": "DistillPath", "dim": 384, "suffix": "_dp_uni2h"},
+}
+DISTILLPATH_HUB = "RamonK/DistillPath-KS16-UNI2h"
+
 USER_UNI_CKPT = None          # path saved by the dashboard ("Locate UNI2-h weights"), see backend.py
 EXTRA_UNI_CANDIDATES = []     # extra locations, e.g. a models/UNI2-h folder next to the packaged exe
+EXTRA_DP_CANDIDATES = []      # same for DistillPath (models/DistillPath-KS16-UNI2h next to the exe)
 
 
 def _hf_cache_candidates():
@@ -112,17 +128,62 @@ def uni2h_available():
     return uni_checkpoint_path() is not None
 
 
-def resuni_config_available(archA, metric):
-    """config name for this Stage-A choice, or None if unsupported / heads missing."""
+def distillpath_checkpoint_path():
+    """Local model.safetensors of DistillPath-KS16-UNI2h, or None (then it is downloaded on first use)."""
+    p = os.environ.get("GLIOMA_SPARSE_DISTILLPATH_CKPT")
+    if p and Path(p).exists():
+        return Path(p)
+    roots = [os.environ.get("HF_HUB_CACHE"),
+             str(Path(os.environ["HF_HOME"]) / "hub") if os.environ.get("HF_HOME") else None,
+             str(Path.home() / ".cache" / "huggingface" / "hub")]
+    cache = [f for r in filter(None, roots)
+             for f in sorted(Path(r).glob("models--RamonK--DistillPath-KS16-UNI2h/snapshots/*/model.safetensors"))]
+    for candidate in list(EXTRA_DP_CANDIDATES) + [
+        REPO_ROOT / "models" / "DistillPath-KS16-UNI2h" / "model.safetensors",
+        REPO_ROOT.parent / "mahmoodlab" / "models" / "DistillPath-KS16-UNI2h" / "model.safetensors",
+    ] + cache:
+        if Path(candidate).exists():
+            return Path(candidate)
+    return None
+
+
+def distillpath_available():
+    """True if DistillPath can run: weights found locally, or the hub client is installed to fetch them."""
+    try:
+        import timm  # noqa: F401
+    except ImportError:
+        return False
+    if distillpath_checkpoint_path() is not None:
+        return True
+    try:
+        import huggingface_hub  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def encoder_available(encoder="uni2h"):
+    return uni2h_available() if encoder == "uni2h" else distillpath_available()
+
+
+def resuni_config_available(archA, metric, encoder="uni2h"):
+    """head config name for this Stage-A choice and encoder, or None if unsupported / heads missing."""
     cfg = CONFIG_FOR_STAGE_A.get((archA, metric))
     if cfg is None:
         return None
+    cfg += ENCODERS[encoder]["suffix"]
     if not heads_available(cfg, 64):
         return None
     return cfg
 
 
-TILE_OPTIONS = (8, 16, 32, 64, 128, 256, 512, 1024)
+TILE_OPTIONS = (8, 16, 32, 64, 128, 256, 512, 1024, "all")   # "all": every tissue tile in the regions (heads lr_nall)
+ALL_TILES_CAP = 4096       # "all" keeps at most this many tiles (a random subset beyond), to bound memory and time
+
+
+def norm_n(n):
+    """Tile count as used in head file names: an int, or "all" (also accepted as 0 / None / "all")."""
+    return "all" if n in (0, None, "all") else int(n)
 
 
 def heads_available(cfg, n):
@@ -135,8 +196,8 @@ def tile_options(cfg):
     return [n for n in TILE_OPTIONS if heads_available(cfg, n)]
 
 
-def resuni_available_configs():
-    return {f"{a}:{m}": resuni_config_available(a, m) is not None for a, m in CONFIG_FOR_STAGE_A}
+def resuni_available_configs(encoder="uni2h"):
+    return {f"{a}:{m}": resuni_config_available(a, m, encoder) is not None for a, m in CONFIG_FOR_STAGE_A}
 
 
 # ============================================================
@@ -173,6 +234,40 @@ def get_uni_encoder(device):
             transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
         ])
     return _encoder, _encoder_transform
+
+
+_dp = None
+
+
+def get_distillpath_encoder(device):
+    """DistillPath-KS16-UNI2h with the input pipeline of the paper's features (TRIDENT kaiko eval transform)."""
+    global _dp
+    if _dp is None:
+        import timm
+        from torchvision import transforms
+        ckpt = distillpath_checkpoint_path()
+        if ckpt is not None:
+            from safetensors.torch import load_file
+            model = timm.create_model("vit_small_patch16_224", pretrained=False, num_classes=0)
+            model.load_state_dict(load_file(str(ckpt)), strict=True)
+        else:
+            try:
+                model = timm.create_model(f"hf_hub:{DISTILLPATH_HUB}", pretrained=True, num_classes=0)
+            except Exception as e:
+                raise RuntimeError(f"DistillPath weights not found locally and the download from "
+                                   f"huggingface.co/{DISTILLPATH_HUB} failed ({type(e).__name__}); "
+                                   "set GLIOMA_SPARSE_DISTILLPATH_CKPT to a local model.safetensors") from e
+        model.to(device).eval()
+        _dp = (model, transforms.Compose([
+            transforms.Resize(224, interpolation=transforms.InterpolationMode.BILINEAR, antialias=True),
+            transforms.CenterCrop(224), transforms.ToTensor(),
+            transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)),
+        ]))
+    return _dp
+
+
+def get_encoder(device, encoder="uni2h"):
+    return get_uni_encoder(device) if encoder == "uni2h" else get_distillpath_encoder(device)
 
 
 def get_resuni_heads(config, n=N_TILES):
@@ -220,11 +315,16 @@ def sample_region_tiles(slide, base_mpp, bboxes, n=N_TILES, seed=SEED):
     """Random tissue tiles (PIL images) drawn from inside `bboxes`, plus how many tissue
     tiles were found in total. Reads are capped at MAX_CANDIDATE_READS candidates for
     responsiveness; a random subset of the candidate grid is read first when the grid is
-    larger than that, so the result is still an unbiased sample of the region(s)."""
+    larger than that, so the result is still an unbiased sample of the region(s).
+    n = "all" reads every candidate and keeps every tissue tile, up to ALL_TILES_CAP (the
+    candidates are shuffled, so stopping there keeps a random subset)."""
     tile_level0 = _tile_size_level0(base_mpp)
     coords = candidate_tile_coords(bboxes, tile_level0)
     rng = np.random.default_rng(seed)
-    max_reads = max(MAX_CANDIDATE_READS, 4 * n)   # larger tile counts need a larger candidate read budget
+    if n == "all":
+        max_reads, n, stop_at = len(coords), ALL_TILES_CAP, ALL_TILES_CAP
+    else:
+        max_reads, stop_at = max(MAX_CANDIDATE_READS, 4 * n), 4 * n   # larger counts need a larger read budget
     if len(coords) > max_reads:
         idx = rng.choice(len(coords), size=max_reads, replace=False)
         coords = [coords[i] for i in idx]
@@ -237,7 +337,7 @@ def sample_region_tiles(slide, base_mpp, bboxes, n=N_TILES, seed=SEED):
             tile = tile.resize((TILE_PX, TILE_PX), Image.BICUBIC)
         if _is_tissue(tile):
             tissue_tiles.append(((x, y, tile_level0, tile_level0), tile))
-        if len(tissue_tiles) >= n * 4:   # plenty of candidates; stop reading early
+        if len(tissue_tiles) >= stop_at:   # plenty of candidates; stop reading early
             break
 
     n_found = len(tissue_tiles)
@@ -248,18 +348,19 @@ def sample_region_tiles(slide, base_mpp, bboxes, n=N_TILES, seed=SEED):
 
 
 @torch.no_grad()
-def embed_tiles(tiles, device, batch_size=32):
-    """[(bbox, PIL image), ...] -> (n, 1536) float32 UNI2-h features."""
-    encoder, transform = get_uni_encoder(device)
+def embed_tiles(tiles, device, batch_size=32, encoder="uni2h"):
+    """[(bbox, PIL image), ...] -> (n, 1536) UNI2-h or (n, 384) DistillPath float32 features."""
+    dim = ENCODERS[encoder]["dim"]
+    model, transform = get_encoder(device, encoder)
     feats = []
     autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16) if device == "cuda" else _nullcontext()
     with autocast:
         for start in range(0, len(tiles), batch_size):
             batch = tiles[start:start + batch_size]
             x = torch.stack([transform(img) for _, img in batch]).to(device)
-            out = encoder(x).float().cpu().numpy()
+            out = model(x).float().cpu().numpy()
             feats.append(out)
-    return np.concatenate(feats, axis=0) if feats else np.zeros((0, 1536), np.float32)
+    return np.concatenate(feats, axis=0) if feats else np.zeros((0, dim), np.float32)
 
 
 class _nullcontext:
@@ -324,7 +425,7 @@ def bin_tile_to_cell(tx, ty, bbox, grid=(8, 8)):
     return r, c
 
 
-def region_contribution_grid(slide, base_mpp, bbox, config, pred_idx, grid=(8, 8), n=200):
+def region_contribution_grid(slide, base_mpp, bbox, config, pred_idx, grid=(8, 8), n=200, encoder="uni2h"):
     """Dense per-region evidence grid (same shape as the app's classic ResNet occlusion
     grid): resamples `bbox` densely (independent of whatever tiles the slide-level n=64
     draw happened to use) and bins each tile's contribution to `pred_idx` into `grid`.
@@ -332,7 +433,7 @@ def region_contribution_grid(slide, base_mpp, bbox, config, pred_idx, grid=(8, 8
     tiles, _ = sample_region_tiles(slide, base_mpp, [bbox], n=n)
     if not tiles:
         return None
-    feats = embed_tiles(tiles, "cuda" if torch.cuda.is_available() else "cpu")
+    feats = embed_tiles(tiles, "cuda" if torch.cuda.is_available() else "cpu", encoder=encoder)
     contrib = contributions_for_class(feats, config, pred_idx)
     imp = np.zeros(grid, np.float32)
     cnt = np.zeros(grid, np.int32)
