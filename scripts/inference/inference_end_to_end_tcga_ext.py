@@ -200,7 +200,7 @@ def load_combined_test_rows(split_csv):
 
 
 # ============================================================
-# EXTERNAL COHORT (e.g. external) LABEL RESOLUTION
+# EXTERNAL COHORT LABEL RESOLUTION
 # ============================================================
 
 def _labels_from_folder_name_ext(folder):
@@ -230,11 +230,11 @@ def _true_labels_from_ancestor_ext(wsi_path):
 
 
 # ============================================================
-# EXTERNAL DRIVER (e.g. external -- one checkpoint pair, no per-fold holdout)
+# EXTERNAL DRIVER (one checkpoint pair, no per-fold holdout)
 # ============================================================
 
 def run_external_tcga_ext(args):
-    """Score an external cohort (external, ...) with one checkpoint pair."""
+    """Score an external cohort with one checkpoint pair."""
     from glioma_sparse.data_utils.transforms import build_eval_transform
     transform = build_eval_transform()
     control_img = Image.open(_rel(args.control_image)).convert("RGB")
@@ -413,7 +413,7 @@ def run_testset_tcga_ext(args):
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--external", action="store_true", default=False,
-                   help="score a labeled external cohort (e.g. external) against ground truth "
+                   help="score a labeled external cohort against ground truth "
                        "inferred from its subtype folder names, using a single given "
                        "--stage-a-ckpt/--stage-b-ckpt (no fold globbing: external data isn't "
                        "held out per fold, run once per checkpoint pair you want to cover and "
@@ -456,8 +456,8 @@ def parse_args():
     p.add_argument("--min-tissue", type=float, default=0.25)
     p.add_argument("--output-size", type=int, default=2048)
     p.add_argument("--stain-profile", dest="stain_profile", default=None,
-                   help='name of a fitted stain profile to normalize against, e.g. "EXT-profile" '
-                       "for external (see glioma_sparse.preprocessing.stain_normalization); "
+                   help='name of a fitted stain profile to normalize against, e.g. "TCGA-Glioma" '
+                       "(see glioma_sparse.preprocessing.stain_normalization); "
                        "omit for no correction")
     p.add_argument("--stage-b-riskmap", action="store_true", default=True)
     p.add_argument("--no-stage-b-riskmap", dest="stage_b_riskmap", action="store_false",

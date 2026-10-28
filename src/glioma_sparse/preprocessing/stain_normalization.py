@@ -3,7 +3,7 @@ Macenko (2009) stain normalization for Glioma-SPARSE, organised as named,
 dataset-specific PROFILES rather than a single on/off switch.
 
 Why profiles instead of a boolean: different external-validation sources need
-different corrections. external and TCGA were each found to carry a different
+different corrections. External sources were each found to carry a different
 degree of stain/scanner shift relative to the EBRAINS training data, so
 normalizing everything toward one fixed reference doesn't make sense once more
 than one external dataset is in play. A profile bundles the Stage-A (thumbnail)
@@ -11,12 +11,11 @@ and Stage-B (high-res patch) references fitted for ONE dataset, under one name.
 
 Profiles live as JSON files in preprocessing/stain_profiles/, one file per
 profile (id == filename stem). Built-in profiles shipped with this repo:
-    EXT-profile      -- external external-validation set (.mrxs source slides)
     TCGA-Glioma  -- TCGA external-validation set
 
 Usage (apply an existing profile):
     from glioma_sparse.preprocessing.stain_normalization import normalize_with_profile
-    normalized_rgb = normalize_with_profile(rgb_uint8_array, "EXT-profile", stage="A")
+    normalized_rgb = normalize_with_profile(rgb_uint8_array, "TCGA-Glioma", stage="A")
 
 Usage (fit a new profile from a folder of images, e.g. a new site's data):
     from glioma_sparse.preprocessing.stain_normalization import fit_and_save_profile

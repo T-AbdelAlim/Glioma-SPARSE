@@ -1,7 +1,7 @@
 {
   "id": "EBRAINS-TCGA-train-ref",
   "label": "EBRAINS+TCGA combined training reference",
-  "description": "Class-stratified reference fitted directly from the EBRAINS+TCGA combined training data (both sources, unnormalized -- TCGA patches went into training without correction). Supersedes EXT-profile / TCGA-Glioma for validating models trained on the combined pool: those two profiles were fitted before TCGA was added to training and reflect an EBRAINS-only reference distribution.",
+  "description": "Class-stratified reference fitted directly from the EBRAINS+TCGA combined training data (both sources, unnormalized -- TCGA patches went into training without correction). Supersedes TCGA-Glioma for validating models trained on the combined pool: that profile was fitted before TCGA was added to training and reflects an EBRAINS-only reference distribution.",
   "stageA": {
     "stain_matrix": [
       [

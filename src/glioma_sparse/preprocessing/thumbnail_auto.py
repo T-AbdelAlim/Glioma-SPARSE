@@ -19,14 +19,14 @@ STAIN NORMALIZATION (by profile)
     After either path produces the thumbnail, a Macenko stain-normalization
     step (glioma_sparse.preprocessing.stain_normalization) can be applied,
     re-staining the thumbnail to match a reference fitted from the EBRAINS
-    training data for ONE named external dataset -- e.g. "EXT-profile" (external)
-    or "TCGA-Glioma" (TCGA). Pass `stain_profile=None` (the default) for no
+    training data for ONE named external dataset -- e.g. "TCGA-Glioma"
+    (TCGA). Pass `stain_profile=None` (the default) for no
     normalization: this is correct for the EBRAINS training/test data itself,
     since there is no distribution to correct there, and it is the only sane
     default now that more than one external dataset has its own profile --
     there is no single "always on" correction to fall back to.
 
-    Background: the external and TCGA external-validation sets were each found
+    Background: external-validation sets such as TCGA were found
     to carry systematically less apparent hematoxylin and a paler, washed-out
     appearance than the training distribution, by different amounts. See
     glioma_sparse.preprocessing.stain_normalization and the stain_profiles/
@@ -47,7 +47,7 @@ HOW TO WIRE IT IN (one line, at each entry point)
         from glioma_sparse.preprocessing.thumbnail_auto import create_wsi_thumbnail_auto as create_wsi_thumbnail
     Every existing call site keeps working unchanged (stain_profile defaults
     to None, i.e. no normalization, matching the original behavior); pass
-    stain_profile="EXT-profile" / "TCGA-Glioma" / etc. wherever you know which
+    stain_profile="TCGA-Glioma" / etc. wherever you know which
     external dataset you're processing.
 
 CLI DIAGNOSTIC MODE (no pipeline changes needed to just check a slide)
@@ -113,7 +113,7 @@ def create_wsi_thumbnail_auto(slide_path, output_path=None, target_mpp=4.0,
     Same signature/return shape as the original, plus:
         stain_profile (str, optional; default None): name of a fitted profile
             (see stain_normalization.list_profiles()) to normalize this
-            thumbnail against, e.g. "EXT-profile" or "TCGA-Glioma". None (the
+            thumbnail against, e.g. "TCGA-Glioma". None (the
             default) applies no correction -- the right choice for EBRAINS
             data itself, since there is no distribution to correct there.
     """

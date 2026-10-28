@@ -1,17 +1,14 @@
 """
 External validation (TCGA, 180 slides, subtype-balanced: 60 GBM / 60 astro / 60 oligo): all systems,
-one metric code path. Mirrors scripts/analysis/external_comparison.py exactly (same helpers from
-master_comparison.py), with paths pointed at the TCGA cohort instead of external. The original external
-script is left untouched.
+one metric code path (same helpers as master_comparison.py).
 
 Systems (EBRAINS-trained models applied unchanged; no tuning on the external data):
   * ResNet cascades: RN18 / RN50 x best-F1 / best-AUC checkpoints (results/e2e_external_<cfg>_tcga/per_slide.csv)
   * UNI2-h at Stage B: results/resuni/<cfg>/predictions_external_tcga.csv
   * UNI2-h + CLAM-SB full-slide benchmark: results/external_TCGA_val/clam_predictions.csv
 
-Unlike external, this cohort is subtype-balanced by design (no majority-class shortcut), so the
-resection/biopsy/unlisted stratification is dropped (not meaningful for TCGA) and no majority-baseline
-caveat is needed, though it is still reported for direct comparability.
+The cohort is subtype-balanced by design (no majority-class shortcut); the majority baseline is still
+reported for comparability.
 """
 
 import argparse

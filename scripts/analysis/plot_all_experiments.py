@@ -645,14 +645,6 @@ def combined(R, tables):
     (C / "README.md").write_text(COMBINED_README, encoding="utf8")
 
 
-EXTERNAL_README = """# Combined figures: external validation (external, 122 slides)
-
-EBRAINS-trained models applied unchanged to 122 external slides (one per patient; GBM 83, oligodendroglioma 27, astrocytoma 12; no controls).
-Every system gives five predictions per slide (one per fold model); curves pool all 5 x 122 predictions, legend AUCs are pooled AUCs.
-Same file numbering and colour code as results/figures/combined; see docs/experiments/EXTERNAL_VALIDATION.md.
-"""
-
-
 COMBINED_README = """# Combined figures
 
 Overlays of several systems on the same axes. Headline systems: the four archived ResNet cascades
@@ -683,36 +675,19 @@ Curves pool the five held-out test folds (220 rows, 190 unique slides); legend A
 def main():
     import argparse
     ap = argparse.ArgumentParser()
-    ap.add_argument("--external", action="store_true", help="figures for the external (external) validation")
-    ap.add_argument("--tag", default="none", help="external stain variant")
     ap.add_argument("only", nargs="*")
     args = ap.parse_args()
     global OUT
     R = pd.read_csv(MASTER)
     extra = []
-    if args.external:
-        from scripts.analysis.external_comparison import build_external_systems, EXT
-        OUT = REPO / "results" / "figures_external"
-        systems = [(g, n, t, None, d) for g, n, t, d in build_external_systems(args.tag)]
-        rows = []
-        for g, n, t, c, d in systems:
-            r, _ = metrics(t)
-            rows.append({"group": g, "system": n, **r})
-        cost = ["system", "params_trained", "params_frozen", "params_total", "gflops_per_slide",
-                "encoder_tile_forwards", "uni_tiles", "pct_full_UNI_tiles", "pct_full_UNI_gflops"]
-        Re = pd.DataFrame(rows).merge(R[cost], on="system", how="left")
-        em = pd.read_csv(EXT / f"external_master_{args.tag}.csv")[
-            ["system", "e2e_acc_pooled_over_tile_draws_mean", "e2e_acc_pooled_over_tile_draws_sd"]]
-        R = Re.merge(em, on="system", how="left")
-    else:
-        systems, *_ = build_systems()
-        # TCGA-extended archived runs (different test set, no control class)
-        for name, path in (("RN50 TCGA-extended best-AUC", "results/e2e_testset_tcga_ext/e2e_testset_report.xlsx"),
-                           ("RN50 TCGA-extended best-F1", "results/e2e_testset_tcga_ext_f1/e2e_testset_report.xlsx")):
-            d = archived(path)
-            if "prob_control" not in d:
-                d["prob_control"] = 0.0
-            extra.append(("TCGA-extended (different test set)", name, cascade_table(d, sub_probs_archived(d)), None, d))
+    systems, *_ = build_systems()
+    # TCGA-extended archived runs (different test set, no control class)
+    for name, path in (("RN50 TCGA-extended best-AUC", "results/e2e_testset_tcga_ext/e2e_testset_report.xlsx"),
+                       ("RN50 TCGA-extended best-F1", "results/e2e_testset_tcga_ext_f1/e2e_testset_report.xlsx")):
+        d = archived(path)
+        if "prob_control" not in d:
+            d["prob_control"] = 0.0
+        extra.append(("TCGA-extended (different test set)", name, cascade_table(d, sub_probs_archived(d)), None, d))
     keep = []
     for g, n, t, c, d in systems + extra:
         if g == "UNI2-h at Stage B (sparse)" and not n.endswith(", 64 tiles"):
@@ -732,8 +707,6 @@ def main():
     A_head = {k: v for k, v in A.items()}
     R2 = R.copy()
     combined(R2, keep)
-    if args.external:
-        (OUT / 'combined' / 'README.md').write_text(EXTERNAL_README, encoding='utf8')
     # top-level index
     lines = ["# Figures\n", "Independent figures per experiment (one folder each) and `combined/` overlays. "
              "See the docstring of `scripts/analysis/plot_all_experiments.py` for what each numbered figure shows.\n",

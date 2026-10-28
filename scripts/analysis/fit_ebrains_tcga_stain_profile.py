@@ -1,7 +1,7 @@
 """
 Fit a stain-normalization profile from the EBRAINS+TCGA combined training
-data itself (both sources, unnormalized), rather than reusing EXT-profile /
-TCGA-Glioma, which predate TCGA being added to training. Class-stratified
+data itself (both sources, unnormalized), rather than reusing
+TCGA-Glioma, which predates TCGA being added to training. Class-stratified
 (grade for Stage A, subtype for Stage B) to avoid weighting toward whichever
 class has the most images.
 
@@ -87,10 +87,10 @@ def main():
         description=(
             "Class-stratified reference fitted directly from the EBRAINS+TCGA "
             "combined training data (both sources, unnormalized -- TCGA patches "
-            "went into training without correction). Supersedes EXT-profile / "
+            "went into training without correction). Supersedes "
             "TCGA-Glioma for validating models trained on the combined pool: "
-            "those two profiles were fitted before TCGA was added to training "
-            "and reflect an EBRAINS-only reference distribution."),
+            "that profile was fitted before TCGA was added to training "
+            "and reflects an EBRAINS-only reference distribution."),
         stageA=stageA_to_save, stageB=stageB_to_save,
         fitted_from_stageA=(
             f"Stage-A training thumbnails: data/included_ebrains-tcga/"

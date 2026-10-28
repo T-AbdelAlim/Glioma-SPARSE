@@ -850,7 +850,7 @@ def parse_args():
     p.add_argument("--testset", action="store_true",
                    default=(c["run_mode"] == "testset"))
     p.add_argument("--external", action="store_true", default=False,
-                   help="score a labeled external cohort (e.g. TCGA/external) against "
+                   help="score a labeled external cohort (e.g. TCGA) against "
                        "ground truth inferred from its subtype folder names, using a "
                        "single given --stage-a-ckpt/--stage-b-ckpt (no fold globbing: "
                        "external data isn't held out per fold, run once per checkpoint "
@@ -862,8 +862,7 @@ def parse_args():
     p.add_argument("--slide-list", default=None,
                    help="--external mode: path to a text file of absolute WSI paths (one per "
                        "line), restricting the scan under --input to just those slides -- e.g. "
-                       "a resection-only subset resolved by "
-                       "scripts.analysis.resolve_external_resection_list. Omit to process every "
+                       "a resection-only subset. Omit to process every "
                        "WSI found under --input.")
     p.add_argument("--run-name", default=c["run_name"])
     p.add_argument("--input", default=c["input"])
@@ -884,7 +883,7 @@ def parse_args():
     p.add_argument("--output-size", type=int, default=c["output_size"])
     p.add_argument("--stain-profile", dest="stain_profile", default=c["stain_profile"],
                    help='name of a fitted stain profile to normalize against, e.g. '
-                       '"EXT-profile" or "TCGA-Glioma" (see glioma_sparse.preprocessing.'
+                       '"TCGA-Glioma" (see glioma_sparse.preprocessing.'
                        'stain_normalization.list_profiles()); omit for no correction')
     p.add_argument("--stage-b-riskmap", action="store_true",
                    default=c["stage_b_riskmap"])

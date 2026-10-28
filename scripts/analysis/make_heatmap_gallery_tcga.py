@@ -6,12 +6,11 @@ average) | UNI2-h-at-Stage-B evidence for the predicted subtype.
 
 Because all three model families (ResNet cascade / CLAM benchmark / UNI2-h-at-Stage-B) are rendered
 on the SAME slide in the SAME figure, the comparison is inherently apples-to-apples across models --
-there is no separate "per-model" gallery, by design (this mirrors Figure 1 / make_heatmap_figures.py's
-run_external(), scaled from 1 example to 10 per class and without the correct/incorrect stratification,
+there is no separate "per-model" gallery, by design (this mirrors Figure 1 / make_heatmap_figures.py,
+scaled from 1 example to 10 per class and without the correct/incorrect stratification,
 since the goal here is a representative gallery, not curated agreement/disagreement cases).
 
-Stage-A regions and the ResUNI head shown are the fold-1 model's (consistent with the existing external
-gallery code); CLAM attention is averaged over all five fold models.
+Stage-A regions and the ResUNI head shown are the fold-1 model's; CLAM attention is averaged over all five fold models.
 
 Usage: python -m scripts.analysis.make_heatmap_gallery_tcga [--n-per-class 10] [--seed 0]
 """

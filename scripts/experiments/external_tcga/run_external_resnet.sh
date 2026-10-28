@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # External validation (TCGA, 180 slides, subtype-balanced): ResNet cascades, all five EBRAINS fold models
-# applied unchanged. Mirrors scripts/experiments/external_cohort/run_external_resnet.sh exactly.
+# applied unchanged.
 # Usage: run_external_resnet.sh rn18_f1 | rn18_auc | rn50_f1 | rn50_auc
 cd "$(dirname "$0")/../../.." || exit 1
 export PYTHONUNBUFFERED=1 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
