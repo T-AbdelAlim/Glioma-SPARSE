@@ -47,7 +47,7 @@ SEED = 42
 MAX_CANDIDATE_READS = 1200  # safety cap so a very large region set stays interactive
 
 # (Stage-A arch, Stage-A metric) -> config name, i.e. which trained ResUNI head applies.
-# Only these three combinations were validated (see docs/experiments/MASTER_COMPARISON.md);
+# Only these three combinations were validated;
 # resnet18/auc has no trained ResUNI head.
 CONFIG_FOR_STAGE_A = {
     ("resnet18", "f1"): "rn18_f1",
@@ -88,7 +88,7 @@ def uni_checkpoint_path():
     # 2) extra locations set by the caller (models/UNI2-h next to the packaged exe);
     # 3) inside this repo, if the user drops the checkpoint there;
     # 4) the sibling mahmoodlab/TRIDENT checkout's own local_ckpts.json location, if this
-    #    machine already set TRIDENT up (see docs/experiments/EXTERNAL_VALIDATION.md);
+    #    machine already set TRIDENT up;
     # 5) the Hugging Face hub cache.
     for candidate in ([Path(USER_UNI_CKPT)] if USER_UNI_CKPT else []) + list(EXTRA_UNI_CANDIDATES) + [
         REPO_ROOT / "models" / "UNI2-h" / "pytorch_model.bin",

@@ -1,6 +1,6 @@
 """
-Evaluation of experiments E1 (Stage-A selection rules) and E2 (tile-count sweep, internal + external on the same grid),
-docs/experiments/EXPERIMENT_LOG.md. Uses the metric code of master_comparison.py / external_comparison_tcga.py.
+Evaluation of experiments E1 (Stage-A selection rules) and E2 (tile-count sweep, internal + external on the same grid).
+Uses the metric code of master_comparison.py / external_comparison_tcga.py.
     python -m scripts.analysis.revision_oct22_eval e1|e2      (Glioma-SPARSE venv)
 Outputs: results/revision_oct22/e1_selection_rules.csv|json, e2_tile_sweep.csv|json
 """

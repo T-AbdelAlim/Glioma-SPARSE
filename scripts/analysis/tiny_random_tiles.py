@@ -1,5 +1,5 @@
 """
-Experiment E7b/E7c (docs/experiments/EXPERIMENT_LOG.md): DistillPath-KS16-UNI2h features of tiles drawn at random from
+Experiment E7b/E7c: DistillPath-KS16-UNI2h features of tiles drawn at random from
 the WHOLE slide (no Stage A regions), with the tile draws of E6 (single_stage_ntiles.py): per slide and draw d,
 perm_d = default_rng([d, crc32(slide_id)]).permutation(number of TRIDENT tiles), n tiles = perm_d[:n].
 

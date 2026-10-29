@@ -1,5 +1,5 @@
 """
-Experiment E7 (docs/experiments/EXPERIMENT_LOG.md): tiny pathology ViTs as Stage B encoder instead of UNI2-h (681M).
+Experiment E7: tiny pathology ViTs as Stage B encoder instead of UNI2-h (681M).
 Re-encodes exactly the TRIDENT tiles (20x, 256 px, same coordinates as features_uni_v2) whose centre lies inside any
 Stage A region of any fold, with four ViT-S/16 encoders (22M) that share one input pipeline (224 px, mean = std = 0.5):
 

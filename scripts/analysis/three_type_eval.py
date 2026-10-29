@@ -1,5 +1,5 @@
 """
-Experiment E9 (docs/experiments/EXPERIMENT_LOG.md): the six-class predictions collapsed to the three WHO 2021 types
+Experiment E9: the six-class predictions collapsed to the three WHO 2021 types
 (astrocytoma, IDH-mutant; oligodendroglioma, IDH-mutant and 1p/19q-codeleted; glioblastoma, IDH-wildtype), for comparison
 with published work that predicts type without grade. Tumour slides only; a tumour slide predicted as control (or without a
 patch-region) counts as an error. Type scores: sums of the six-class scores per type, renormalised over the three types.

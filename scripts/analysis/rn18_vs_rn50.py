@@ -1,5 +1,5 @@
 """
-Experiment E4 (docs/experiments/EXPERIMENT_LOG.md): ResNet-18 vs ResNet-50 as Stage A of Glioma-SPARSE
+Experiment E4: ResNet-18 vs ResNet-50 as Stage A of Glioma-SPARSE
 (best-F1 checkpoints, Stage B = UNI2-h + logistic head trained on the regions of the same Stage A).
 
 Paired comparison on the same 220 internal test predictions (5 EBRAINS folds) and the same 180 TCGA slides

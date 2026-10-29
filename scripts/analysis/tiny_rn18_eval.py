@@ -1,5 +1,5 @@
 """
-Experiment E7d (docs/experiments/EXPERIMENT_LOG.md): ResNet-18 Stage A + DistillPath-KS16-UNI2h Stage B end to end.
+Experiment E7d: ResNet-18 Stage A + DistillPath-KS16-UNI2h Stage B end to end.
 Both Stage A models (best-F1) get a DistillPath Stage B fitted on their own regions, from the same all-tile DistillPath
 features (tiny_random_tiles.py --pass all), so the comparison is paired and tile-for-tile consistent:
   --convert   writes TRIDENT-format files (TRIDENT coords + DistillPath features) to <out>/full/<cohort>/dp_uni2h/

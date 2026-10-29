@@ -1,5 +1,5 @@
 """
-Experiment E6 (docs/experiments/EXPERIMENT_LOG.md): is the two-stage design worth it? Single-stage six-class prediction
+Experiment E6: is the two-stage design worth it? Single-stage six-class prediction
 directly from n UNI2-h tiles drawn at random from the WHOLE slide (no Stage A), n = 64, 128, 256, 512, 1024 and all.
 
   A  benchmark CLAM-SB (the five trained fold models, trained on all tiles) applied to the n random tiles at test time

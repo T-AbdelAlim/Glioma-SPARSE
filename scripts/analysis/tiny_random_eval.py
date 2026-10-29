@@ -1,5 +1,5 @@
 """
-Experiment E7b (docs/experiments/EXPERIMENT_LOG.md): does Stage B still need the Stage A regions? Stage A (ResNet-50
+Experiment E7b: does Stage B still need the Stage A regions? Stage A (ResNet-50
 best-F1) grades the slide as usual; Stage B gets 64 tiles drawn at random from the WHOLE slide instead of from the
 regions, with the unchanged n = 64 heads (fitted on region tiles of the training slides; seed-0 heads of
 rn50_f1_nsweep / rn50_f1_dp_uni2h), as in E1 'random_slide'. Tile draws: E6 rule (tiny_random_tiles.py, pass A),

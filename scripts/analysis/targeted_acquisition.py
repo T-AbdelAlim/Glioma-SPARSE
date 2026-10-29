@@ -1,5 +1,5 @@
 """
-Experiment E8 (docs/experiments/EXPERIMENT_LOG.md): targeted acquisition. How much tissue Glioma-SPARSE needs at 20x, and
+Experiment E8: targeted acquisition. How much tissue Glioma-SPARSE needs at 20x, and
 whether stage B still works from the top-ranked patch-region alone, as from a single targeted capture.
   (1) per test slide (internal: fold of the test slide; TCGA: each of the five fold models): tissue tiles, tiles within the
       patch-regions and within the top-ranked patch-region (256-px tiles at 20x, 0.5 um/px: 0.0164 mm2 per tile)

@@ -3,7 +3,6 @@
 Bash scripts (Git Bash / WSL), run from the repository root with the project
 venv on PATH (`source .venv/Scripts/activate`). Each phase writes logs to `logs/`
 and skips work that already exists, so it can be re-run after an interruption.
-Design, recipes and results: `docs/experiments/cascade_refinement.md`.
 
 | Phase | Script | What |
 |---|---|---|

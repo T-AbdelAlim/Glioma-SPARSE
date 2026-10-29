@@ -1,5 +1,5 @@
 """
-Experiment E7c (docs/experiments/EXPERIMENT_LOG.md): E6 variant B with DistillPath-KS16-UNI2h instead of UNI2-h.
+Experiment E7c: E6 variant B with DistillPath-KS16-UNI2h instead of UNI2-h.
 Single-stage six-class prediction from n tiles drawn at random from the WHOLE slide (no Stage A): mean of the n tile
 features -> StandardScaler -> class-balanced logistic regression over the six classes, per fold and n, C on the
 validation slides; n = 64, 128, 256, 512, 1024 (three draws) and all. Tile draws, folds, test sets and head recipe are

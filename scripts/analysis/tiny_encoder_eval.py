@@ -1,5 +1,5 @@
 """
-Experiment E7 (docs/experiments/EXPERIMENT_LOG.md): tiny ViT-S/16 encoders (22M, 8.5 GFLOPs per tile) in Stage B
+Experiment E7: tiny ViT-S/16 encoders (22M, 8.5 GFLOPs per tile) in Stage B
 instead of UNI2-h (681M, 360.6 GFLOPs per tile). Stage A (ResNet-50 best-F1), regions, tile draws, head recipe and folds
 are identical; only the tile features differ (tiny_encoder_features.py, heads by resuni_nsweep.py --features-root,
 configs rn50_f1_<encoder>; reference rn50_f1_nsweep).

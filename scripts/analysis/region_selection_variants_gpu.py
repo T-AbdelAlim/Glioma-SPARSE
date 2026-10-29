@@ -1,5 +1,5 @@
 """
-Experiment E1 (docs/experiments/EXPERIMENT_LOG.md), GPU part: patch-injection logit shifts for ALL three Stage-A
+Experiment E1, GPU part: patch-injection logit shifts for ALL three Stage-A
 classes on every internal test prediction, so alternative region-selection rules can be compared offline.
 
 For each fold k (ResNet-50 best-F1 checkpoint of split_0k) and each test slide of that fold that Stage A does not

@@ -1,5 +1,5 @@
 """
-Experiment E1 (docs/experiments/EXPERIMENT_LOG.md), offline part: alternative Stage-A region-selection rules,
+Experiment E1, offline part: alternative Stage-A region-selection rules,
 all evaluated with the SAME frozen Stage-B heads (results/resuni/rn50_f1/lr_n64_fold{k}.npz, fitted on the main
 regions of the training slides) and the same 64-tile draw rule (rng(1000*draw + fold)) as the main analysis.
 

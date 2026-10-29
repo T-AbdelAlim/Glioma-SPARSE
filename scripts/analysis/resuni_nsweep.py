@@ -1,5 +1,5 @@
 """
-Extended tile-count sweep (2026-10-22, experiment E2 in docs/experiments/EXPERIMENT_LOG.md).
+Extended tile-count sweep (2026-10-22, experiment E2).
 Identical to resuni_predictions.py (same regions, folds, draws, head fitting) except:
   * NS = 8, 16, 32, 64, 128, 256, 512, 1024, all  (internal AND external, so both curves share the same grid);
   * a head is saved for EVERY n (seed 0): lr_n{n}_fold{k}.npz / lr_nall_fold{k}.npz (used by the dashboard's tile-count option).

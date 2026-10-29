@@ -12,8 +12,8 @@ results/figures/<experiment>/          independent figures per experiment (PNG +
     08_error_breakdown      outcome per true class: correct / grade wrong / no region / subtype wrong
 results/figures/combined/              overlays of systems on the same axes (see README.md there)
 
-All curves use the same per-slide probabilities and metric code as MASTER_COMPARISON.md
-(scripts/analysis/master_comparison.py). ROC/PR curves pool the five test folds (220 rows);
+All curves use the same per-slide probabilities and metric code as
+scripts/analysis/master_comparison.py. ROC/PR curves pool the five test folds (220 rows);
 AUCs in legends are pooled AUCs, so they differ slightly from the fold-mean AUCs in the tables.
 Six-class scores: P(grade) x P(subtype) for cascades (control: P(control)), the six-class softmax for CLAM.
 """
@@ -650,8 +650,8 @@ COMBINED_README = """# Combined figures
 Overlays of several systems on the same axes. Headline systems: the four archived ResNet cascades
 (blue = ResNet-18, green = ResNet-50; solid = best-F1 checkpoints, dotted = best-AUC), the three UNI2-h at Stage B
 systems with 64 UNI2-h tiles per slide (orange / red / dark yellow) and the full-slide UNI2-h + CLAM benchmark (violet).
-Curves pool the five held-out test folds (220 rows, 190 unique slides); legend AUCs are pooled AUCs
-(the fold-mean AUCs are in docs/experiments/MASTER_COMPARISON.md). Source data: results/master_comparison/.
+Curves pool the five held-out test folds (220 rows, 190 unique slides); legend AUCs are pooled AUCs.
+Source data: results/master_comparison/.
 
 | File | Content |
 |---|---|
