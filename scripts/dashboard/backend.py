@@ -697,7 +697,7 @@ def api_risk_map(req: RiskReq):
         risk_map, target_class = compute_risk_map(
             target_img=s["thumbnail"], control_img=control_img(), model=model,
             transform=_transform, grid=GRID, target_class=s["stage_a"]["pred_idx"],
-            device=DEVICE, control_shuffle_seed=SEED, score="logit")
+            device=DEVICE, control_shuffle_seed=SEED, score="logit", method="crop")
         s["risk_map"] = risk_map
         s["risk_map_arch"] = arch
         s["risk_map_metric"] = metric
@@ -1395,7 +1395,7 @@ def _process_slide_headless(slide_path, archA, archB, percentile, occlusion,
     risk_map, _ = compute_risk_map(
         target_img=thumbnail, control_img=control_img(), model=mA,
         transform=_transform, grid=GRID, target_class=predA,
-        device=DEVICE, control_shuffle_seed=SEED, score="logit")
+        device=DEVICE, control_shuffle_seed=SEED, score="logit", method="crop")
     s["risk_map"] = risk_map
     if on_riskmap:
         on_riskmap(thumbnail, risk_map)

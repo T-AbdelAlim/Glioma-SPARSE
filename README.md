@@ -102,6 +102,7 @@ python -m scripts.stage_b.build_stageB_cohort --splits-dir splits --model resnet
 python -m scripts.analysis.e2e_regions --model resnet50 ^
     --stage-a-glob "ResNet50_output/training_output/*_split_0*/best_f1.pth" --out results/e2e_regions_rn50_f1.csv
 ```
+`compute_risk_map(..., method="crop")` gives the same signal map with far less computation: a last-layer feature of the ResNet only sees a window of the image (427 px for ResNet-50), so the control is passed once and each injected patch only within a crop around it (the patch plus 448 px on each side). On a laptop CPU this takes patch injection from about 180 s to 25 s per slide. The dashboard uses it; the scripts above use the default `method="full"`, with which all reported results were obtained.
 
 ### 5. Stage B: vision transformer on the selected tiles
 Stage B uses the 20x, 256 px tiles and UNI2-h features of [TRIDENT](https://github.com/mahmoodlab/TRIDENT) (`features_uni_v2/<slide_id>.h5`). Per fold, n tiles are drawn among the tiles inside the selected regions, their features are averaged and a class-balanced logistic regression is fitted (C chosen on the validation slides). External slides get the fold's head unchanged:
