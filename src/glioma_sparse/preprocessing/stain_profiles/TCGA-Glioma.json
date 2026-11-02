@@ -1,0 +1,139 @@
+{
+  "id": "TCGA-Glioma",
+  "label": "TCGA-Glioma",
+  "description": "External-validation set sourced from TCGA diffuse glioma .svs whole-slide images.",
+  "stageA": {
+    "stain_matrix": [
+      [
+        0.2764102621650142,
+        0.5575000512208681
+      ],
+      [
+        0.8915344714990919,
+        0.7196258597979204
+      ],
+      [
+        0.3588365269850645,
+        0.41392307835977615
+      ]
+    ],
+    "max_conc": [
+      0.9839783489534042,
+      0.567523451201379
+    ],
+    "n_used": 353,
+    "n_failed": 0,
+    "n_total_considered": 353,
+    "classes_included": [
+      "GBM_IDHwt",
+      "astro_IDHmt_G2",
+      "astro_IDHmt_G3",
+      "astro_IDHmt_G4",
+      "control",
+      "oligo_IDHmt_1p19qdel_G2",
+      "oligo_IDHmt_1p19qdel_G3"
+    ],
+    "classes_excluded_too_few": {}
+  },
+  "stageB": {
+    "stain_matrix": [
+      [
+        0.23990332182228194,
+        0.5593236421987473
+      ],
+      [
+        0.8950940522822753,
+        0.7480866735320071
+      ],
+      [
+        0.37583644547532913,
+        0.3571041755025332
+      ]
+    ],
+    "max_conc": [
+      1.3182261998866105,
+      1.7203947425920554
+    ],
+    "n_used": 300,
+    "n_failed": 0,
+    "n_total_considered": 300,
+    "classes_included": [
+      "IDH_mt",
+      "IDH_mt_1p19q",
+      "IDH_wt"
+    ]
+  },
+  "_note": "stageA/stageB above are the TARGET to normalize TOWARD -- the class-balanced EBRAINS training reference (equal-weighted average across {GBM_IDHwt, astro_IDHmt_G2, astro_IDHmt_G3, astro_IDHmt_G4, control, oligo_IDHmt_1p19qdel_G2, oligo_IDHmt_1p19qdel_G3} for Stage-A, {IDH_mt, IDH_mt_1p19q, IDH_wt} for Stage-B; classes with fewer than 10 images excluded). CORRECTED 2026-07-30: this file previously (incorrectly) stored TCGA's OWN fitted average as the target, which would normalize images toward 'what TCGA on average looks like' (itself GBM/IDH-wildtype-majority under naive uniform sampling, ~44% of the Stage-A pool) instead of toward the training distribution.",
+  "fitted_from_stageA": "Stage-A thumbnails: class-stratified fit, up to 100 images per class from EBRAINS data/ebrains_thumbnails/*/included/*.jpg.",
+  "fitted_from_stageB": "Stage-B patches: class-stratified fit, up to 100 images per molecular class, pooled across all 5 folds of data/stage_b_cohort_RN18_F1/patches.",
+  "validated_against": {
+    "note": "TCGA's OWN class-balanced characterization (diagnostic only -- NOT used as the applied target). Computed the same way as the shared training reference: equal-weighted average across per-class fits, classes with n<10 excluded.",
+    "stageA_classes_included": [
+      "GBM_IDHwt",
+      "astro_IDHmt_G2",
+      "astro_IDHmt_G3",
+      "astro_IDHmt_G4",
+      "oligo_IDHmt_1p19qdel_G2",
+      "oligo_IDHmt_1p19qdel_G3"
+    ],
+    "stageA_classes_excluded_too_few": {},
+    "stageA_h_angle_deg": 11.995360073515096,
+    "stageA_e_angle_deg": 5.859943750664517,
+    "stageA_conc_ratio_vs_train": [
+      0.9024544719360441,
+      1.365676451653468
+    ],
+    "stageA_per_class_max_conc": {
+      "astro_IDHmt_G3": [
+        0.9014302161489288,
+        0.7675587121845688
+      ],
+      "astro_IDHmt_G4": [
+        0.8545651614646945,
+        0.7812419922565321
+      ],
+      "GBM_IDHwt": [
+        0.8665028205787073,
+        0.8092979150253838
+      ],
+      "oligo_IDHmt_1p19qdel_G3": [
+        0.9740684090926391,
+        0.8806877920247995
+      ],
+      "astro_IDHmt_G2": [
+        0.8345955938393522,
+        0.6988643627839328
+      ],
+      "oligo_IDHmt_1p19qdel_G2": [
+        0.8968117666831477,
+        0.71266970412576
+      ]
+    },
+    "stageB_classes_included": [
+      "IDH_mt",
+      "IDH_mt_1p19q",
+      "IDH_wt"
+    ],
+    "stageB_h_angle_deg": 10.65609087375288,
+    "stageB_e_angle_deg": 6.682905333852729,
+    "stageB_conc_ratio_vs_train": [
+      0.9039087872875311,
+      0.9553211829085235
+    ],
+    "stageB_per_class_max_conc": {
+      "IDH_mt": [
+        1.2589997450404926,
+        1.8095285813582214
+      ],
+      "IDH_wt": [
+        1.2699329706046534,
+        1.6440820224667856
+      ],
+      "IDH_mt_1p19q": [
+        1.0457360214853244,
+        1.4769780178629341
+      ]
+    },
+    "fitted_on": "2026-07-30"
+  }
+}
