@@ -1,0 +1,12 @@
+# conda alternative to setup_env.ps1 / setup_env.sh (same pinned versions):
+#   conda env create -f environment.yml
+#   conda activate glioma-sparse
+name: glioma-sparse
+channels:
+  - conda-forge
+dependencies:
+  - python=3.14
+  - pip
+  - pip:
+      - -r requirements-lock.txt
+      - -e .

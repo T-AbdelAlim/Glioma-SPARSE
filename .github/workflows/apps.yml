@@ -1,0 +1,82 @@
+name: apps
+
+# Builds the standalone dashboard for Windows and macOS and attaches it to a release that already holds
+# Glioma-SPARSE-models.zip. Started by hand from the light-release branch: Actions > apps > Run workflow
+# (branch light-release, release tag), or: gh workflow run apps --ref light-release -f tag=<tag>
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v1.0.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            app: GliomaSPARSE-Dashboard-Windows
+          - os: macos-14
+            app: GliomaSPARSE-Dashboard-macOS
+    runs-on: ${{ matrix.os }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PYTHONIOENCODING: utf-8
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          else
+            pip install torch torchvision
+          fi
+          pip install -r requirements.txt pyinstaller
+          pip install -e .
+
+      - name: Trained models
+        run: |
+          gh release download "${{ inputs.tag }}" -p Glioma-SPARSE-models.zip
+          python -c "import zipfile; zipfile.ZipFile('Glioma-SPARSE-models.zip').extractall('.')"
+
+      - name: Check from source
+        run: python -m scripts.dashboard.run_dashboard --check
+
+      - name: Build
+        run: python scripts/dashboard/build_exe.py
+
+      - name: Check the app (outside the repository, so it uses its own model bundle)
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            cp -r "dist/${{ matrix.app }}" "$RUNNER_TEMP/"
+            EXE="$RUNNER_TEMP/${{ matrix.app }}/${{ matrix.app }}.exe"
+          else
+            cp -R "dist/${{ matrix.app }}.app" "$RUNNER_TEMP/"
+            EXE="$RUNNER_TEMP/${{ matrix.app }}.app/Contents/MacOS/${{ matrix.app }}"
+          fi
+          "$EXE" --check; status=$?
+          cat "$(dirname "$EXE")/dashboard.log" 2>/dev/null || cat "$HOME/GliomaSPARSE/dashboard.log"
+          exit $status
+
+      - name: Package and attach to the release
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            cd dist && 7z a -tzip "../${{ matrix.app }}.zip" "${{ matrix.app }}" > /dev/null && cd ..
+          else
+            ditto -c -k --keepParent "dist/${{ matrix.app }}.app" "${{ matrix.app }}.zip"
+          fi
+          gh release upload "${{ inputs.tag }}" "${{ matrix.app }}.zip" --clobber

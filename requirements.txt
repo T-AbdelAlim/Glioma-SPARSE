@@ -1,0 +1,56 @@
+# Direct dependencies, unpinned. For the exact working versions use
+# requirements-lock.txt (setup_env.ps1 / setup_env.sh install that one).
+
+# ============================================================
+# PYTORCH (INSTALL SEPARATELY FOR CUDA)
+# ============================================================
+
+# CUDA 12.6 (current environment, see requirements-lock.txt)
+# pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+
+# CPU ONLY
+# pip install torch torchvision
+
+# ============================================================
+# CORE
+# ============================================================
+
+numpy
+pandas
+scipy
+scikit-learn
+matplotlib
+opencv-python
+Pillow
+tqdm
+
+# ============================================================
+# WSI / PATHOLOGY
+# ============================================================
+
+openslide-python
+openslide-bin
+h5py                # TRIDENT tilings and tile features (retraining Stage B)
+
+# ============================================================
+# MODELS
+# ============================================================
+
+timm
+
+# ============================================================
+# DASHBOARD (scripts/dashboard/)
+# ============================================================
+
+fastapi
+uvicorn
+pydantic
+openpyxl
+pywebview
+
+# ============================================================
+# OPTIONAL
+# ============================================================
+
+# nvidia-ml-py thop   # GPU energy + FLOP logging (scripts/lib/profiling.py)
+# pyinstaller         # only needed to build the standalone .exe (build_exe.py)
