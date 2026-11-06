@@ -22,7 +22,7 @@ jobs:
         include:
           - os: windows-latest
             app: GliomaSPARSE-Dashboard-Windows
-          - os: macos-14
+          - os: macos-latest
             app: GliomaSPARSE-Dashboard-macOS
     runs-on: ${{ matrix.os }}
     env:
