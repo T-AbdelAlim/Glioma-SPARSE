@@ -30,6 +30,7 @@ from pathlib import Path
 import base64
 import io
 import json
+import math
 import os
 import re
 import sys
@@ -159,7 +160,6 @@ INTEGRATED = {
 # six-class score whose highest class is the integrated diagnosis, as in the manuscript. The code takes a tuple of
 # folds; with several, their six-class scores are averaged (the manuscript's external validation).
 FOLDS = (resuni.APP_FOLD,)
-MAX_REGIONS = 4     # patch-regions: the cells above the percentile with enough tissue, at most 4
 SIX = ["control", "astro_low", "astro_high", "oligo_low", "oligo_high", "GBM"]
 SIX_DX = {"control": "Control tissue", "astro_low": INTEGRATED[("low", "IDH_mt")],
           "astro_high": INTEGRATED[("high", "IDH_mt")], "oligo_low": INTEGRATED[("low", "IDH_mt_1p19q")],
@@ -396,7 +396,7 @@ class StageAReq(BaseModel):
 class RiskReq(BaseModel):
     session_id: str
     percentile: float = 95.0
-    cap: int = 0            # 0 = use all tiles above the percentile (Option A)
+    cap: int = 0            # 0 = as many cells as the percentile selects (max_regions)
     min_tissue: float = 0.25
 
 class ExtractReq(BaseModel):
@@ -762,10 +762,16 @@ def _fold_risk_maps(s):
     return s["fold_risk_maps"]
 
 
-def _select(s, percentile, min_tissue=0.25, cap=MAX_REGIONS):
+def max_regions(percentile):
+    """The most cells a percentile can select: 4 of the 64 at p95, as in the manuscript, 8 at p88."""
+    return max(1, math.ceil(GRID[0] * GRID[1] * (100 - percentile) / 100))
+
+
+def _select(s, percentile, min_tissue=0.25, cap=0):
     """Patch-regions of each fold model: the cells at or above the percentile of its signal map with enough tissue,
-    the strongest first, at most `cap`. Returns the cells selected by any fold, each with the folds that selected it
-    and its mean signal, strongest first (the regions the dashboard shows)."""
+    the strongest first, at most `cap` (0: max_regions). Returns the cells selected by any fold, each with the folds
+    that selected it and its mean signal, strongest first (the regions the dashboard shows)."""
+    cap = cap or max_regions(percentile)
     fold_sel = []
     for rm in _fold_risk_maps(s):
         if rm is None:
@@ -780,7 +786,7 @@ def _select(s, percentile, min_tissue=0.25, cap=MAX_REGIONS):
                     if tf >= min_tissue:
                         cand.append({"row": r, "col": c, "risk": float(rm[r, c]), "tissue": round(tf, 2)})
         cand.sort(key=lambda d: -d["risk"])
-        fold_sel.append(cand[:cap] if cap > 0 else cand)
+        fold_sel.append(cand[:cap])
     mean = s["risk_map"]
     union = {}
     for k, sel in zip(FOLDS, fold_sel):
@@ -802,7 +808,7 @@ def api_risk_map(req: RiskReq):
     if "stage_a" not in s:
         raise HTTPException(400, "run stage_a first")
     # the fold maps are computed once per Stage A model; a new percentile only re-selects (fast)
-    selected = _select(s, req.percentile, req.min_tissue, req.cap or MAX_REGIONS)
+    selected = _select(s, req.percentile, req.min_tissue, req.cap)
     rm = s["risk_map"]
     norm = (rm - rm.min()) / (np.ptp(rm) + 1e-8)
     return {
@@ -814,7 +820,7 @@ def api_risk_map(req: RiskReq):
         "fold_regions": [[[c["row"], c["col"]] for c in sel] for sel in s["fold_selected"]],
         "n_candidates": len(selected),
         "n_selected": len(selected),
-        "cap": req.cap or MAX_REGIONS,
+        "cap": req.cap or max_regions(req.percentile),
         "grid": list(GRID),
         "grid_rows": GRID[0],
         "grid_cols": GRID[1],
