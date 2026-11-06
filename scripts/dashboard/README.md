@@ -20,8 +20,8 @@ This opens the dashboard as a native window. To use a browser instead:
 1. **Import slide**: paste a whole-slide image path or browse, optionally pick a stain correction, and build
    the 2048 × 2048 thumbnail (4 µm/pixel). Results are saved in a `GS_<slide>` folder next to the slide.
 2. **Stage A: grade and patch-regions**: ResNet-50 (default) or ResNet-18 of cross-validation fold 5, with the
-   checkpoint of best validation F1, AUC or accuracy, and the signal percentile (default 95); at most four
-   patch-regions. The 8 × 8 grid next to the slider shows the cells that leave
+   checkpoint of best validation F1, AUC or accuracy, and the signal percentile (default 95, at most four
+   patch-regions; lower percentiles select more). The 8 × 8 grid next to the slider shows the cells that leave
    Stage A as patch-regions: while dragging, how many can; after a run, exactly the selected cells on the
    slide's signal map (cells above the percentile with enough tissue).
 3. **Stage B: molecular type**: the frozen encoder (DistillPath; UNI2-h in the `full` branch) and the number

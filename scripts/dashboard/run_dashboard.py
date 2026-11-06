@@ -49,6 +49,19 @@ PORT = 8000
 ICON_PATH = str(REPO_ROOT / "docs" / "app_icon.ico")
 
 
+def _unblock_dlls():
+    """Windows marks the files of a downloaded zip as coming from the internet, and .NET refuses to load such a library
+    ("Failed to resolve Python.Runtime.Loader.Initialize"). Remove the mark from the .NET libraries of the app window."""
+    if not (FROZEN and sys.platform == "win32"):
+        return
+    for folder in ("pythonnet", "clr_loader", "webview"):
+        for dll in (Path(sys._MEIPASS) / folder).rglob("*.dll"):
+            try:
+                os.remove(f"{dll}:Zone.Identifier")
+            except OSError:     # no mark, or a read-only folder
+                pass
+
+
 def _run_server():
     from backend import app
     uvicorn.run(app, host=HOST, port=PORT, log_level="warning")
@@ -100,6 +113,7 @@ def check():
 def main():
     threading.Thread(target=_run_server, daemon=True).start()
     _wait_until_up()
+    _unblock_dlls()
     webview.create_window("Glioma-SPARSE", f"http://{HOST}:{PORT}",
                           width=1440, height=900, min_size=(1024, 700))
     webview.start(icon=ICON_PATH)
