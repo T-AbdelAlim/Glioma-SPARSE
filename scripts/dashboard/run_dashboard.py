@@ -5,6 +5,7 @@ OS window (pywebview: WebView2 on Windows, WebKit on macOS) instead of a browser
 
     --check   start the server, report the device, encoders and trained models found, and exit
               (exit code 0 when the app can run the full pipeline)
+    --check --slide <path>   also run the whole pipeline on this slide, as in the dashboard and as a batch run
 """
 
 import os
@@ -28,6 +29,9 @@ if FROZEN:
             continue
     sys.stdout = log_file
     sys.stderr = log_file
+    # a crash in native code (a window, OpenSlide) ends the app without a Python error, write where it happened
+    import faulthandler
+    faulthandler.enable(log_file)
 else:
     # `python -m scripts.dashboard.run_dashboard` puts the repo root on the path,
     # not this folder, so `from backend import app` needs it added
@@ -96,7 +100,7 @@ def check():
         import numpy as np
         import backend as B
         img = B.control_img()
-        model = B.get_model("stage_a", "resnet50", "f1")
+        model = B.get_fold_models("resnet50", "f1")[0]   # the fold the app uses
         probs = B.forward_probs(model, img)[0]
         rm, _ = B.compute_risk_map(target_img=img, control_img=img, model=model, transform=B._transform, grid=B.GRID,
                                    target_class=int(np.argmax(probs)), device=B.DEVICE,
@@ -106,8 +110,42 @@ def check():
         print("Stage A on the control thumbnail:", " ".join(f"{p:.4f}" for p in probs))
         print(f"patch injection: signal map mean {rm.mean():.4f}, max {rm.max():.4f}")
         print(f"DistillPath on 8 tiles: mean feature {feats.mean():.4f}, norm {np.linalg.norm(feats.mean(0)):.3f}")
+    if good and "--slide" in sys.argv:
+        good = check_slide(sys.argv[sys.argv.index("--slide") + 1])
     print("check OK" if good else "check FAILED")
     return 0 if good else 1
+
+
+def _post(path, body):
+    import json
+    import urllib.request
+    req = urllib.request.Request(f"http://{HOST}:{PORT}/api/{path}", data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"})
+    return json.load(urllib.request.urlopen(req, timeout=3600))
+
+
+def check_slide(path):
+    """The whole pipeline on one slide, as the dashboard runs it and as a batch run (the batch runs each slide in
+    a separate process)."""
+    import tempfile
+    import urllib.error
+    try:
+        t = time.time()
+        sid = _post("import", {"slide_path": path})["session_id"]
+        a = _post("stage_a", {"session_id": sid})
+        _post("risk_map", {"session_id": sid})
+        b = _post("stage_b", {"session_id": sid})
+        d = _post("integrate", {"session_id": sid})
+        print(f"slide {Path(path).name}: {a['grade_pred']}, {b['subtype_pred']}, {d['integrated_diagnosis']} "
+              f"({time.time() - t:.0f} s)")
+        run = _post("batch", {"input_folder": str(Path(path).parent), "output_location": tempfile.mkdtemp()})
+        while not (p := _post("batch_progress", {"run_id": run["run_id"]}))["finished"]:
+            time.sleep(5)
+        print(f"batch run: {p['ok']} of {p['total']} slides OK")
+        return p["ok"] > 0 and p["errors"] == 0
+    except urllib.error.HTTPError as e:
+        print("slide check failed:", e.code, e.read().decode(errors="replace"))
+        return False
 
 
 def main():
