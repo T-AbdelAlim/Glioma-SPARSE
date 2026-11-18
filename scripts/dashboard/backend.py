@@ -482,28 +482,47 @@ def config():
 
 
 # ---- native "browse for WSI" dialog (runs on the server = this machine) ----
+WSI_TYPES = [("Whole-slide images", "*.ndpi *.svs *.mrxs *.tif *.tiff"), ("All files", "*.*")]
+
+
+def native_dialog(title, folder=False, types=()):
+    """Open a file or folder picker on this machine and return the chosen path ('' when cancelled).
+
+    The browser cannot hand a real path to the backend, so the dialog opens here. On macOS a window may only be
+    made on the main thread, which runs the app window, and a Tk dialog from the server crashes the app. There the
+    app window makes the dialog (pywebview runs it on the main thread), or macOS itself when the dashboard runs
+    in a browser."""
+    if sys.platform == "darwin":
+        import webview
+        if webview.windows:
+            kind = webview.FileDialog.FOLDER if folder else webview.FileDialog.OPEN
+            types = [f"{d} ({';'.join(p.split())})" for d, p in types if p != "*.*"]
+            r = webview.windows[0].create_file_dialog(kind, file_types=types)
+            return str(r[0]) if r else ""
+        import subprocess
+        what = "folder" if folder else "file"
+        r = subprocess.run(["osascript", "-e", f'POSIX path of (choose {what} with prompt "{title}")'],
+                           capture_output=True, text=True)
+        return r.stdout.strip()
+    import tkinter as tk
+    from tkinter import filedialog
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    try:
+        if folder:
+            return filedialog.askdirectory(title=title) or ""
+        return filedialog.askopenfilename(title=title, filetypes=list(types) or [("All files", "*.*")]) or ""
+    finally:
+        root.destroy()
+
+
 @app.post("/api/browse")
 def api_browse():
-    """Open a native OS file picker and return the chosen WSI path.
-
-    The browser cannot hand a real filesystem path to the backend, so we open a
-    Tk dialog on the machine running uvicorn. Works when the server runs locally
-    with a desktop session (the intended setup). If Tk is unavailable, the user
-    can still paste a path manually.
-    """
+    """Open a native file picker and return the chosen WSI path. If no dialog can be opened, the user can still
+    paste a path."""
     try:
-        import tkinter as tk
-        from tkinter import filedialog
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-        path = filedialog.askopenfilename(
-            title="Select a whole-slide image",
-            filetypes=[("Whole-slide images",
-                        "*.ndpi *.svs *.mrxs *.tif *.tiff"),
-                       ("All files", "*.*")])
-        root.destroy()
-        return {"path": path or ""}
+        return {"path": native_dialog("Select a whole-slide image", types=WSI_TYPES)}
     except Exception as e:
         raise HTTPException(400,
             f"native file dialog unavailable ({e}); paste the path manually")
@@ -522,13 +541,8 @@ def api_uni2h_locate(req: UniLocateReq = UniLocateReq()):
     path = req.path
     if not path:
         try:
-            import tkinter as tk
-            from tkinter import filedialog
-            root = tk.Tk(); root.withdraw(); root.attributes("-topmost", True)
-            path = filedialog.askopenfilename(
-                title="Locate the UNI2-h weights (pytorch_model.bin)",
-                filetypes=[("UNI2-h weights", "*.bin *.pth"), ("All files", "*.*")])
-            root.destroy()
+            path = native_dialog("Locate the UNI2-h weights (pytorch_model.bin)",
+                                 types=[("UNI2-h weights", "*.bin *.pth"), ("All files", "*.*")])
         except Exception as e:
             raise HTTPException(400, f"native file dialog unavailable ({e}); paste the path instead")
     if not path:
@@ -1405,12 +1419,7 @@ class LoadReq(BaseModel):
 @app.post("/api/browse_folder")
 def api_browse_folder():
     try:
-        import tkinter as tk
-        from tkinter import filedialog
-        root = tk.Tk(); root.withdraw(); root.attributes("-topmost", True)
-        path = filedialog.askdirectory(title="Select a GS_ analysis folder")
-        root.destroy()
-        return {"folder": path or ""}
+        return {"folder": native_dialog("Select a GS_ analysis folder", folder=True)}
     except Exception as e:
         raise HTTPException(400, f"native dialog unavailable ({e}); type the path")
 
@@ -1638,12 +1647,7 @@ def explainer_media(name: str):
 @app.post("/api/browse_output")
 def api_browse_output():
     try:
-        import tkinter as tk
-        from tkinter import filedialog
-        root = tk.Tk(); root.withdraw(); root.attributes("-topmost", True)
-        path = filedialog.askdirectory(title="Select where the batch run folder will be created")
-        root.destroy()
-        return {"folder": path or ""}
+        return {"folder": native_dialog("Select where the batch run folder will be created", folder=True)}
     except Exception as e:
         raise HTTPException(400, f"native dialog unavailable ({e}); type the path")
 
