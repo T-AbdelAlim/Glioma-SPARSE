@@ -1,8 +1,9 @@
 name: apps
 
-# Builds the standalone dashboard for Windows and macOS and attaches it to a release that already holds
-# Glioma-SPARSE-models.zip. Started by hand from the light-release branch: Actions > apps > Run workflow
-# (branch light-release, release tag), or: gh workflow run apps --ref light-release -f tag=<tag>
+# Builds the standalone dashboard for Windows and macOS and tests it on a real slide. The apps can be downloaded
+# from the run (Artifacts) to try them first. With publish on, they are attached to the release, which already
+# holds Glioma-SPARSE-models.zip. Started by hand from the light-release branch: Actions > apps > Run workflow,
+# or: gh workflow run apps --ref light-release -f tag=<tag> [-f publish=true]
 
 on:
   workflow_dispatch:
@@ -10,6 +11,10 @@ on:
       tag:
         description: "Release tag (e.g. v1.0.0)"
         required: true
+      publish:
+        description: "Attach the apps to the release"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -53,13 +58,24 @@ jobs:
           gh release download "${{ inputs.tag }}" -p Glioma-SPARSE-models.zip
           python -c "import zipfile; zipfile.ZipFile('Glioma-SPARSE-models.zip').extractall('.')"
 
+      - name: Test slide cache
+        uses: actions/cache@v4
+        with:
+          path: slide
+          key: test-slide-TCGA-19-2619
+
+      - name: Test slide (TCGA-19-2619, glioblastoma, open access on the GDC)
+        run: |
+          mkdir -p slide
+          [ -f slide/TCGA-19-2619.svs ] || curl -sSfL -o slide/TCGA-19-2619.svs https://api.gdc.cancer.gov/data/7ed12f8c-44cf-4348-ae1b-b19a678b09ef
+
       - name: Check from source
         run: python -m scripts.dashboard.run_dashboard --check
 
       - name: Build
         run: python scripts/dashboard/build_exe.py
 
-      - name: Check the app (outside the repository, so it uses its own model bundle)
+      - name: Check the app on the test slide (outside the repository, so it uses its own model bundle)
         run: |
           if [ "$RUNNER_OS" = Windows ]; then
             cp -r "dist/${{ matrix.app }}" "$RUNNER_TEMP/"
@@ -68,15 +84,46 @@ jobs:
             cp -R "dist/${{ matrix.app }}.app" "$RUNNER_TEMP/"
             EXE="$RUNNER_TEMP/${{ matrix.app }}.app/Contents/MacOS/${{ matrix.app }}"
           fi
-          "$EXE" --check; status=$?
+          status=0
+          "$EXE" --check --slide "$PWD/slide/TCGA-19-2619.svs" || status=$?
           cat "$(dirname "$EXE")/dashboard.log" 2>/dev/null || cat "$HOME/GliomaSPARSE/dashboard.log"
           exit $status
 
-      - name: Package and attach to the release
+      - name: Open the app window and its file dialog
+        if: runner.os == 'macOS'
+        run: |
+          EXE="$RUNNER_TEMP/${{ matrix.app }}.app/Contents/MacOS/${{ matrix.app }}"
+          "$EXE" & PID=$!
+          for i in $(seq 120); do curl -s -o /dev/null http://127.0.0.1:8000/api/config && break; sleep 1; done
+          sleep 5
+          curl -s -X POST http://127.0.0.1:8000/api/browse --max-time 60 > /dev/null &
+          sleep 10
+          if kill -0 $PID 2>/dev/null; then
+            echo "file dialog open, app still running"
+            kill $PID
+          else
+            echo "the app stopped when the file dialog opened"
+            cat "$(dirname "$EXE")/dashboard.log" 2>/dev/null || cat "$HOME/GliomaSPARSE/dashboard.log"
+            REPORT=$(ls -t ~/Library/Logs/DiagnosticReports/* 2>/dev/null | head -1)
+            [ -n "$REPORT" ] && head -100 "$REPORT"
+            exit 1
+          fi
+
+      - name: Package
         run: |
           if [ "$RUNNER_OS" = Windows ]; then
             cd dist && 7z a -tzip "../${{ matrix.app }}.zip" "${{ matrix.app }}" > /dev/null && cd ..
           else
             ditto -c -k --keepParent "dist/${{ matrix.app }}.app" "${{ matrix.app }}.zip"
           fi
-          gh release upload "${{ inputs.tag }}" "${{ matrix.app }}.zip" --clobber
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.app }}
+          path: ${{ matrix.app }}.zip
+          compression-level: 0
+          retention-days: 14
+
+      - name: Attach to the release
+        if: inputs.publish
+        run: gh release upload "${{ inputs.tag }}" "${{ matrix.app }}.zip" --clobber
