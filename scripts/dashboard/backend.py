@@ -496,7 +496,7 @@ def native_dialog(title, folder=False, types=()):
         import webview
         if webview.windows:
             kind = webview.FileDialog.FOLDER if folder else webview.FileDialog.OPEN
-            types = [f"{d} ({';'.join(p.split())})" for d, p in types if p != "*.*"]
+            types = [f"{re.sub(r'[^\w ]+', ' ', d)} ({';'.join(p.split())})" for d, p in types if p != "*.*"]
             r = webview.windows[0].create_file_dialog(kind, file_types=types)
             return str(r[0]) if r else ""
         import subprocess

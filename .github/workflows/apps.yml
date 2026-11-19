@@ -89,25 +89,46 @@ jobs:
           cat "$(dirname "$EXE")/dashboard.log" 2>/dev/null || cat "$HOME/GliomaSPARSE/dashboard.log"
           exit $status
 
-      - name: Open the app window and its file dialog
+      - name: Choose the slide in the file dialog of the app window
         if: runner.os == 'macOS'
         run: |
           EXE="$RUNNER_TEMP/${{ matrix.app }}.app/Contents/MacOS/${{ matrix.app }}"
+          SLIDE="$PWD/slide/TCGA-19-2619.svs"
           "$EXE" & PID=$!
           for i in $(seq 120); do curl -s -o /dev/null http://127.0.0.1:8000/api/config && break; sleep 1; done
           sleep 5
-          curl -s -X POST http://127.0.0.1:8000/api/browse --max-time 60 > /dev/null &
-          sleep 10
+          status=0
+
+          curl -s -X POST http://127.0.0.1:8000/api/browse --max-time 120 > browse.json &
+          CURL=$!
+          sleep 8
+          screencapture -x dialog.png || true
+          osascript -e 'tell application "System Events"' -e 'keystroke "g" using {command down, shift down}' \
+            -e 'delay 2' -e "keystroke \"$SLIDE\"" -e 'delay 2' -e 'key code 36' -e 'delay 2' -e 'key code 36' \
+            -e 'end tell' || echo "could not type in the dialog"
+          wait $CURL
+          echo "browse: $(cat browse.json)"
+          grep -q TCGA-19-2619.svs browse.json || status=1
+
           if kill -0 $PID 2>/dev/null; then
-            echo "file dialog open, app still running"
             kill $PID
           else
-            echo "the app stopped when the file dialog opened"
+            echo "the app stopped"
+            status=1
+          fi
+          if [ $status != 0 ]; then
             cat "$(dirname "$EXE")/dashboard.log" 2>/dev/null || cat "$HOME/GliomaSPARSE/dashboard.log"
             REPORT=$(ls -t ~/Library/Logs/DiagnosticReports/* 2>/dev/null | head -1)
             [ -n "$REPORT" ] && head -100 "$REPORT"
-            exit 1
           fi
+          exit $status
+
+      - uses: actions/upload-artifact@v4
+        if: always() && runner.os == 'macOS'
+        with:
+          name: file-dialog-screenshot
+          path: dialog.png
+          retention-days: 14
 
       - name: Package
         run: |
